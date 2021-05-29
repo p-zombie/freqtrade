@@ -7,4 +7,4 @@ setup:
 
 build:
   docker:
-    bot: Dockerfile
+    web: Dockerfile
