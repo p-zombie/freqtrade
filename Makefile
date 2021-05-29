@@ -9,20 +9,17 @@ all: help
 help: # show all commands
 	@sed -n 's/:.#/:/p' makefile | grep -v sed
 
-update: # update and build local image
+build: # update and build local image
 	docker compose pull && docker compose build
 
 pairs: # pull pairs for $COIN
-	docker compose run --rm freqtrade list-pairs --config user_data/config.test.json --quot=$(COIN) --print-json
+	docker compose run --entrypoint "freqtrade" --rm freqtrade list-pairs --config user_data/config.test.json --quot=$(COIN) --print-json
 
 data: # download data
-	docker compose run --rm freqtrade download-data --config user_data/config.test.json --days 30
+	docker compose run --entrypoint "freqtrade" --rm freqtrade download-data --config user_data/config.test.json
 
 test: # run backtest
-	docker compose run --rm freqtrade backtesting --config user_data/config.test.json --strategy-list $(STRATEGY) --ticker-interval=$(INTERVAL)
-
-build: # build app
-	docker compose build
+	docker compose run --entrypoint "freqtrade" --rm freqtrade backtesting --config user_data/config.test.json --strategy-list $(STRATEGY) --ticker-interval=$(INTERVAL)
 
 stop: # stop containers
 	docker compose stop
