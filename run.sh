@@ -1,7 +1,8 @@
 #!/bin/bash
 
 export PATH="/home/ftuser/.local/bin:$PATH"
-echo $PYTHONPATH
+export PATH="/freqtrade/.local/bin:$PATH"
+export PYTHONPATH=$(python -c "import site, os; print(os.path.join(site.USER_BASE, 'lib', 'python', 'site-packages'))"):$PYTHONPATH
 
 # Default config values
 : "${LIVE_STRATEGY:=SMAOffsetV2}"
@@ -10,7 +11,4 @@ echo $PYTHONPATH
 envsubst < user_data/config.live.json > live.json
 envsubst < user_data/config.dry.json > dry.json
 
-python -c "import site; print(site.USER_BASE)"
-python -m site --user-base
-
-/home/ftuser/.local/bin/honcho start
+honcho start
