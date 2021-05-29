@@ -1,5 +1,5 @@
 Creating the app and deploying
-```bash
+```shell
 heroku update beta
 heroku plugins:install @heroku-cli/plugin-manifest
 heroku create --manifest
