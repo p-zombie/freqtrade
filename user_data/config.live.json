@@ -129,7 +129,7 @@
         "chat_id": "$TELEGRAM_CHAT_ID_LIVE"
     },
     "api_server": {
-        "enabled": true,
+        "enabled": false,
         "listen_ip_address": "0.0.0.0",
         "listen_port": $PORT,
         "verbosity": "error",
