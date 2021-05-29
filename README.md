@@ -37,3 +37,8 @@ heroku open
 ```
 
 Edit `Procfile` to add or remove bots.
+
+Add new DB
+```
+heroku addons:create heroku-postgresql:hobby-dev
+```

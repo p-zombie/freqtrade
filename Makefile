@@ -16,10 +16,10 @@ pairs: # pull pairs for $COIN
 	docker compose run --entrypoint "freqtrade" --rm freqtrade list-pairs --config user_data/config.test.json --quot=$(COIN) --print-json
 
 data: # download data
-	docker compose run --entrypoint "freqtrade" --rm freqtrade download-data --config user_data/config.test.json
+	docker compose run --entrypoint "freqtrade" --rm freqtrade download-data --config user_data/config.test.json --days $(DAYS)
 
 test: # run backtest
-	docker compose run --entrypoint "freqtrade" --rm freqtrade backtesting --config user_data/config.test.json --strategy-list $(STRATEGY) --ticker-interval=$(INTERVAL)
+	docker compose run --entrypoint "freqtrade" --rm freqtrade backtesting --config user_data/config.test.json --strategy-list $(STRATEGY)
 
 stop: # stop containers
 	docker compose stop
