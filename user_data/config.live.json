@@ -1,10 +1,10 @@
 {
     "dry_run": false,
     "timeframe": "5m",
-    "max_open_trades": 4,
+    "max_open_trades": 5,
     "stake_currency": "USDT",
     "stake_amount": 100,
-    "tradable_balance_ratio": 1.00,
+    "tradable_balance_ratio": 0.99,
     "fiat_display_currency": "USD",
     "cancel_open_orders_on_exit": false,
     "unfilledtimeout": {
@@ -14,16 +14,16 @@
     "bid_strategy": {
         "price_side": "bid",
         "ask_last_balance": 0.0,
-        "use_order_book": true,
+        "use_order_book": false,
         "order_book_top": 1,
         "check_depth_of_market": {
             "enabled": false,
-            "bids_to_ask_delta": 0.95
+            "bids_to_ask_delta": 1
         }
     },
     "ask_strategy": {
         "price_side": "ask",
-        "use_order_book": true,
+        "use_order_book": false,
         "order_book_min": 1,
         "order_book_max": 1
     },
@@ -34,10 +34,9 @@
         "ccxt_config": {"enableRateLimit": true},
         "ccxt_async_config": {
             "enableRateLimit": true,
-            "rateLimit": 200
+            "rateLimit": 500
         },
         "pair_whitelist": [
-            ".*/USDT"
         ],
         "pair_blacklist": [
             ".*DOWN/BTC",
@@ -55,24 +54,61 @@
             ".*BULL/.*",
             ".*BEAR/.*",
             ".*BULL2021/.*",
-            ".*BEAR2021/.*"
+            ".*BEAR2021/.*",
+            "GBP/USDT",
+            "EUR/USDT",
+            "CHF/USDT",
+            "AUD/USDT",
+            "JPY/USDT",
+            "CAD/USDT",
+            "DAI/USDT",
+            "USDN/USDT",
+            "USDC/USDT",
+            "KCS/USDT",
+            ".*3/USDT",
+            ".*3L/USDT",
+            ".*3S/USDT",
+            "LYM/USDT",
+            "HORD/USDT",
+            "ONE/USDT",
+            "THETA/USDT",
+            "TRIAS/USDT",
+            "SNX/USDT",
+            "NWC/USDT",
+            "MASK/USDT",
+            "VELO/USDT",
+            "TLOS/USDT",
+            "KLV/USDT",
+            "HTR/USDT",
+            "HAI/USDT",
+            "ETH/USDT",
+            "BTC/USDT"
         ]
     },
     "pairlists": [
         {
-        "method": "VolumePairList",
-        "number_assets": 100,
-        "sort_key": "quoteVolume",
-        "refresh_period": 300
+            "method": "VolumePairList",
+            "number_assets": 100,
+            "sort_key": "quoteVolume",
+            "refresh_period": 1800
         },
-        {"method": "PerformanceFilter"},
+        {"method": "AgeFilter", "min_days_listed": 10},
+        {"method": "SpreadFilter", "max_spread_ratio": 0.005},
+        {"method": "PriceFilter", "low_price_ratio": 0.10},
         {
-        "method": "RangeStabilityFilter",
-        "lookback_days": 10,
-        "min_rate_of_change": 0.01,
-        "refresh_period": 1440
-        }
-    ],
+            "method": "RangeStabilityFilter",
+            "lookback_days": 3,
+            "min_rate_of_change": 0.1,
+            "refresh_period": 1440
+        },
+        {
+            "method": "VolumePairList",
+            "number_assets": 50,
+            "sort_key": "quoteVolume"
+        },
+        {"method": "PerformanceFilter"}	
+
+	],
     "edge": {
         "enabled": false,
         "process_throttle_secs": 3600,
@@ -93,7 +129,7 @@
         "chat_id": "$TELEGRAM_CHAT_ID_LIVE"
     },
     "api_server": {
-        "enabled": false,
+        "enabled": true,
         "listen_ip_address": "0.0.0.0",
         "listen_port": $PORT,
         "verbosity": "error",
