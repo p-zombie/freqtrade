@@ -1,5 +1,6 @@
 Creating the app
 ```shell
+git clone https://github.com/joaorafaelm/freqtrade.git && cd freqtrade
 heroku update beta
 heroku plugins:install @heroku-cli/plugin-manifest
 heroku create --manifest
