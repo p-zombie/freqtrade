@@ -30,3 +30,6 @@ stop: # stop containers
 
 logs: # tail logs for $APP
 	heroku logs --tail --app $(APP)
+
+output: # build output
+	heroku builds:output --app $(APP)

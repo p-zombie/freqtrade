@@ -2,9 +2,9 @@ FROM freqtradeorg/freqtrade:develop
 
 USER root
 RUN apt-get install gettext-base
+RUN pip install honcho
 
 USER ftuser
-RUN pip install --user --no-cache-dir honcho
 
 COPY run.sh /freqtrade/
 COPY Procfile /freqtrade/
