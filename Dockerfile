@@ -10,4 +10,4 @@ COPY run.sh /freqtrade/run.sh
 COPY Procfile /freqtrade/Procfile
 COPY user_data /freqtrade/user_data
 
-ENTRYPOINT ["./run.sh"]
+ENTRYPOINT []
