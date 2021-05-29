@@ -9,7 +9,7 @@ heroku dyno:scale web=1
 ```
 
 Set environment variables
-``
+```
 # example: heroku config:set KEY=value
 TELEGRAM_TOKEN_LIVE=bot token
 TELEGRAM_CHAT_ID_LIVE=chat id
