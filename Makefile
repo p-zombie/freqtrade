@@ -1,20 +1,29 @@
-update:
-	docker-compose pull
+.ONESHELL:
+-include .env
+export
+
+all: help
+
+help: # show all commands
+	@sed -n 's/:.#/:/p' makefile | grep -v sed
+
+update: # update and build local image
+	docker compose pull && docker compose build
 		
-pairs:
-	docker-compose run --rm freqtrade list-pairs --quot=$(COIN) --print-json
+pairs: # pull pairs for $COIN
+	docker compose run --rm freqtrade list-pairs --quot=$(COIN) --print-json
 
-data:
-	docker-compose run --rm freqtrade download-data --exchange binance --days 5 -t 1h
+data: # download data
+	docker compose run --rm freqtrade download-data --exchange binance --days 5 -t 1h
 
-test:
-	docker-compose run --rm freqtrade backtesting --config user_data/config.test.json --strategy-list $(STRATEGY) --ticker-interval=$(INTERVAL)
+test: # run backtest
+	docker compose run --rm freqtrade backtesting --config user_data/config.test.json --strategy-list $(STRATEGY) --ticker-interval=$(INTERVAL)
 
-run:
-	docker-compose up -d
+run: # run app
+	docker compose up
 
-logs:
-	docker-compose logs -f
+stop: # stop containers
+	docker compose stop
 
-stop:
-	docker-compose stop
+logs: # tail logs for $APP
+	heroku logs --tail --app $(APP)
