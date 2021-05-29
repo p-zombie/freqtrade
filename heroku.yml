@@ -8,6 +8,3 @@ setup:
 build:
   docker:
     bot: Dockerfile
-
-run:
-    bot: ./run.sh
