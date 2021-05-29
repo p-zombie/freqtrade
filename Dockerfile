@@ -1,5 +1,6 @@
 FROM freqtradeorg/freqtrade:develop
 
+ENV PATH=/home/ftuser/.local/bin:$PATH
 USER root
 RUN apt-get install gettext-base
 RUN pip install honcho

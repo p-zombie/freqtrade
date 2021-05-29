@@ -1,6 +1,6 @@
 #!/bin/bash
 
-export PATH="ftuser/.local/bin:$PATH"
+export PATH="/home/ftuser/.local/bin:$PATH"
 
 # Default config values
 : "${LIVE_STRATEGY:=SMAOffsetV2}"
