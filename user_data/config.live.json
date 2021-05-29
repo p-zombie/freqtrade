@@ -95,7 +95,7 @@
     "api_server": {
         "enabled": true,
         "listen_ip_address": "0.0.0.0",
-        "listen_port": $PORT,
+        "listen_port": "$PORT",
         "verbosity": "error",
         "enable_openapi": false,
         "jwt_secret_key": "",
