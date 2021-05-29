@@ -12,4 +12,5 @@ envsubst < user_data/config.live.json > live.json
 envsubst < user_data/config.dry.json > dry.json
 
 pip install honcho
+pip install -e .
 honcho start
