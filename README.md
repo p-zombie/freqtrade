@@ -26,4 +26,9 @@ Deploying
 git push heroku master
 ```
 
+Open [FreqUI](https://github.com/freqtrade/frequi)
+```
+heroku open
+```
+
 Edit `Procfile` to add or remove bots.
