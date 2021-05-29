@@ -1,7 +1,5 @@
 #!/bin/bash
 
-export PATH="$HOME/.local/bin:$PATH"
-
 # Default config values
 : "${LIVE_STRATEGY:=SMAOffsetV2}"
 : "${DRY_STRATEGY:=CombinedBinHAndClucV8}"
