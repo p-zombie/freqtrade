@@ -12,6 +12,6 @@ COPY Procfile /freqtrade/
 COPY user_data /freqtrade/user_data
 
 COPY --chown=ftuser:ftuser . /freqtrade/
-COPY --from=python-deps --chown=ftuser:ftuser /home/ftuser/.local /home/ftuser/.local
+COPY --chown=ftuser:ftuser /home/ftuser/.local /home/ftuser/.local
 
 ENTRYPOINT ./run.sh
