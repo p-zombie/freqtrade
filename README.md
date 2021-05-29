@@ -5,10 +5,12 @@ heroku plugins:install @heroku-cli/plugin-manifest
 heroku create --manifest
 heroku labs:enable runtime-dyno-metadata
 heroku addons:create securekey
+heroku dyno:scale web=1
 ```
 
 Set environment variables
-```
+``
+# example: heroku config:set KEY=value
 TELEGRAM_TOKEN_LIVE=bot token
 TELEGRAM_CHAT_ID_LIVE=chat id
 TELEGRAM_TOKEN_DRY=bot token for dry run
