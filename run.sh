@@ -11,4 +11,5 @@ export PYTHONPATH=$(python -c "import site, os; print(os.path.join(site.USER_BAS
 envsubst < user_data/config.live.json > live.json
 envsubst < user_data/config.dry.json > dry.json
 
+pip install honcho
 honcho start
