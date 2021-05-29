@@ -2,13 +2,11 @@ FROM freqtradeorg/freqtrade:develop
 
 USER root
 RUN apt-get install gettext-base
-
+RUN pip install honcho
 
 USER ftuser
-RUN pip install honcho --user
 COPY run.sh /freqtrade/run.sh
-COPY Botfile /freqtrade/Botfile
+COPY Procfile /freqtrade/Procfile
 COPY user_data /freqtrade/user_data
 
-USER ftuser
 ENTRYPOINT ["./run.sh"]
