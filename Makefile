@@ -14,12 +14,12 @@ pairs: # pull pairs for $COIN
 	docker compose run --rm freqtrade list-pairs --quot=$(COIN) --print-json
 
 data: # download data
-	docker compose run --rm freqtrade download-data --exchange binance --days 5 -t 1h
+	docker compose run --rm freqtrade download-data --config user_data/config.test.json --days 30
 
 test: # run backtest
 	docker compose run --rm freqtrade backtesting --config user_data/config.test.json --strategy-list $(STRATEGY) --ticker-interval=$(INTERVAL)
 
-run: # run app
+up: # run app
 	docker compose up
 
 stop: # stop containers
