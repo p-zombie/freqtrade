@@ -1,0 +1,10 @@
+setup:
+  addons:
+    - plan: heroku-postgresql
+      as: LIVE_DATABASE
+    - plan: heroku-postgresql
+      as: DRY_DATABASE
+
+build:
+  docker:
+    bot: Dockerfile
