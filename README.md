@@ -25,3 +25,5 @@ Deploying
 ```
 git push heroku master
 ```
+
+Edit `Procfile` to add or remove bots.
