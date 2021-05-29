@@ -16,6 +16,9 @@ EXCHANGE_KEY=your key
 EXCHANGE_SECRET=your secret
 LIVE_STRATEGY=SMAOffsetV2
 DRY_STRATEGY=CombinedBinHAndClucV8
+# UI credentials
+USERNAME=admin
+PASSWORD=admin
 ```
 
 Deploying
