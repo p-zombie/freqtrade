@@ -7,8 +7,8 @@ RUN apt-get install gettext-base
 USER ftuser
 RUN pip install --user --no-cache-dir honcho
 
-COPY run.sh /freqtrade/
-COPY Procfile /freqtrade/
+COPY run.sh /freqtrade/run.sh
+COPY Botfile /freqtrade/Botfile
 COPY user_data /freqtrade/user_data
 
 USER ftuser
