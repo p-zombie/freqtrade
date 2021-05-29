@@ -1,9 +1,8 @@
-Creating the app and deploying
+Creating the app
 ```shell
 heroku update beta
 heroku plugins:install @heroku-cli/plugin-manifest
 heroku create --manifest
-git push heroku master
 ```
 
 Set environment variables
@@ -17,4 +16,9 @@ EXCHANGE_KEY=your key
 EXCHANGE_SECRET=your secret
 LIVE_STRATEGY=SMAOffsetV2
 DRY_STRATEGY=CombinedBinHAndClucV8
+```
+
+Deploying
+```
+git push heroku master
 ```
