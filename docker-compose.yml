@@ -7,7 +7,6 @@ services:
        dockerfile: "./Dockerfile"
     env_file: 
       - .env
-    restart: unless-stopped
     container_name: freqtrade
     volumes:
       - "./user_data:/freqtrade/user_data"

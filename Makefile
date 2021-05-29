@@ -1,4 +1,6 @@
+.PHONY: run
 .ONESHELL:
+
 -include .env
 export
 
@@ -9,7 +11,7 @@ help: # show all commands
 
 update: # update and build local image
 	docker compose pull && docker compose build
-		
+
 pairs: # pull pairs for $COIN
 	docker compose run --rm freqtrade list-pairs --quot=$(COIN) --print-json
 
@@ -21,9 +23,6 @@ test: # run backtest
 
 build: # build app
 	docker compose build
-
-up: # run app
-	docker compose up
 
 stop: # stop containers
 	docker compose stop
