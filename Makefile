@@ -19,6 +19,9 @@ data: # download data
 test: # run backtest
 	docker compose run --rm freqtrade backtesting --config user_data/config.test.json --strategy-list $(STRATEGY) --ticker-interval=$(INTERVAL)
 
+build: # build app
+	docker compose build
+
 up: # run app
 	docker compose up
 

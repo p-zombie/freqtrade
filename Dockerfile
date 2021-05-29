@@ -4,7 +4,7 @@ USER root
 RUN apt-get install gettext-base
 
 USER ftuser
-RUN pip install honcho
+RUN pip install --user honcho
 
 COPY run.sh /freqtrade/
 COPY Procfile /freqtrade/

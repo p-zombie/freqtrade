@@ -7,4 +7,5 @@
 envsubst < user_data/config.live.json > live.json
 envsubst < user_data/config.dry.json > dry.json
 
+pip install --user honcho
 honcho start
