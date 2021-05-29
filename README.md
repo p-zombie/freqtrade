@@ -3,6 +3,8 @@ Creating the app
 heroku update beta
 heroku plugins:install @heroku-cli/plugin-manifest
 heroku create --manifest
+heroku labs:enable runtime-dyno-metadata
+heroku addons:create securekey
 ```
 
 Set environment variables

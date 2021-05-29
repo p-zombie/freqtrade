@@ -133,8 +133,8 @@
         "listen_port": $PORT,
         "verbosity": "error",
         "enable_openapi": false,
-        "jwt_secret_key": "",
-        "CORS_origins": [],
+        "jwt_secret_key": "$SECURE_KEY",
+        "CORS_origins": ["https://$HEROKU_APP_NAME.herokuapp.com"],
         "username": "$USERNAME",
         "password": "$PASSWORD"
     },
