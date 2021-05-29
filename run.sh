@@ -10,4 +10,4 @@ ls /home/ftuser/.local/bin
 envsubst < user_data/config.live.json > live.json
 envsubst < user_data/config.dry.json > dry.json
 
-/home/ftuser/.local/honcho start
+/home/ftuser/.local/bin/honcho start
