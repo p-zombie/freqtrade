@@ -12,4 +12,4 @@ COPY load_env.sh /freqtrade/load_env.sh
 COPY Procfile /freqtrade/Procfile
 COPY user_data /freqtrade/user_data
 
-ENTRYPOINT ["./run.sh"]
+ENTRYPOINT ["./load_env.sh"]
