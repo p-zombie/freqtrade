@@ -14,13 +14,10 @@ Set environment variables
 # example: heroku config:set KEY=value
 TELEGRAM_TOKEN_LIVE=bot token
 TELEGRAM_CHAT_ID_LIVE=chat id
-TELEGRAM_TOKEN_DRY=bot token for dry run
-TELEGRAM_CHAT_ID_DRY=
 EXCHANGE_NAME=binance
 EXCHANGE_KEY=your key
 EXCHANGE_SECRET=your secret
 LIVE_STRATEGY=SMAOffsetV2
-DRY_STRATEGY=CombinedBinHAndClucV8
 # UI credentials
 USERNAME=admin
 PASSWORD=admin
