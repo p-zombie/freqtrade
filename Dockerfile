@@ -7,7 +7,6 @@ USER ftuser
 COPY requirements.txt /freqtrade/requirements.txt
 RUN pip install --user -r /freqtrade/requirements.txt
 
-COPY run.sh /freqtrade/run.sh
 COPY load_env.sh /freqtrade/load_env.sh
 COPY Procfile /freqtrade/Procfile
 COPY user_data /freqtrade/user_data
