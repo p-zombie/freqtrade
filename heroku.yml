@@ -8,6 +8,3 @@ setup:
 build:
   docker:
     web: Dockerfile
-
-run:
-    web: ./run.sh
