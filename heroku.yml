@@ -10,4 +10,4 @@ build:
     web: Dockerfile
 
 run:
-    web: ./load_env.sh && honcho start
+    web: ./run.sh
