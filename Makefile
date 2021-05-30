@@ -4,6 +4,7 @@
 -include .env
 export
 
+STRATEGIES = $(shell ls user_data/strategies | sed "s/.py//g" | tr "\n" " ")
 all: help
 
 help: # show all commands
@@ -26,6 +27,9 @@ data: # download data
 
 test: # run backtest
 	docker compose run --entrypoint "freqtrade" --rm freqtrade backtesting --config ./user_data/config.test.json --userdir ./user_data --strategy-list $(STRATEGY) -i $(TIMEFRAME) --timerange=$(TIMERANGE)
+
+test-all: # run backtest
+	docker compose run --entrypoint "freqtrade" --rm freqtrade backtesting --config ./user_data/config.test.json --strategy-list $(STRATEGIES)  --timerange=$(TIMERANGE)
 
 stop: # stop containers
 	docker compose stop
