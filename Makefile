@@ -34,7 +34,7 @@ test: # run backtest
 
 test-all: # run backtest
 	docker compose run --rm freqtrade \
-		freqtrade backtesting --config test.json --strategy-list $(STRATEGIES)  --timerange=$(TIMERANGE)
+		freqtrade backtesting --config test.json --strategy-list $(STRATEGIES) --timerange=$(TIMERANGE)
 
 stop: # stop containers
 	docker compose stop
