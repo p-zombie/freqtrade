@@ -1,0 +1,3 @@
+honcho
+psycopg2-binary
+ipdb

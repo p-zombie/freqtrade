@@ -8,3 +8,6 @@ setup:
 build:
   docker:
     web: Dockerfile
+
+run:
+    web: ./load_env.sh && honcho start
