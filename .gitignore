@@ -1,5 +1,4 @@
 .env
 user_data/data*
 user_data/logs*
-user_data/*.test.json
 user_data/*.sqlite
