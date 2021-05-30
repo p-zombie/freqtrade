@@ -103,7 +103,7 @@
         },
         {
             "method": "VolumePairList",
-            "number_assets": 50,
+            "number_assets": 70,
             "sort_key": "quoteVolume"
         },
         {"method": "PerformanceFilter"}	
