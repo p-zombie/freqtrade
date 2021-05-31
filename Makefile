@@ -26,15 +26,22 @@ list-strats: # list strategies
 
 data: # download data
 	docker compose run --rm freqtrade \
-		freqtrade download-data --config test.json --days $(DAYS) -t $(TIMEFRAME)
+		freqtrade download-data --config test.json  --timerange $(TIMERANGE)  -t $(TIMEFRAME)
 
 test: # run backtest
 	docker compose run --rm freqtrade \
-		freqtrade backtesting --config test.json --strategy-list $(STRATEGY) -i $(TIMEFRAME) --timerange=$(TIMERANGE)
+		freqtrade backtesting --config test.json --strategy-list $(STRATEGY) --timeframe $(TIMEFRAME) --timerange=$(TIMERANGE)
+	osascript -e 'display notification "Done"'
 
-test-all: # run backtest
+test-all: # run backtest on all strats
 	docker compose run --rm freqtrade \
-		freqtrade backtesting --config test.json --strategy-list $(STRATEGIES) --timerange=$(TIMERANGE)
+		freqtrade backtesting --config test.json --strategy-list $(STRATEGIES) --timerange=$(TIMERANGE) --timeframe $(TIMEFRAME)
+	osascript -e 'display notification "Done"'
+
+hyperopt: # run hyper opt
+	docker compose run --rm freqtrade \
+		freqtrade hyperopt --config test.json --hyperopt-loss $(LOSS) --spaces $(SPACES) --strategy $(STRATEGY) -e $(EPOCHS) --timerange=$(TIMERANGE) --timeframe=$(TIMEFRAME)
+	osascript -e 'display notification "Done"'
 
 stop: # stop containers
 	docker compose stop

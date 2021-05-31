@@ -1,5 +1,6 @@
 FROM freqtradeorg/freqtrade:develop
 
+ENV PYTHONWARNINGS="ignore"
 USER root
 RUN apt-get install gettext-base
 
