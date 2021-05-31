@@ -11,16 +11,16 @@ logger = logging.getLogger(__name__)
 np.random.seed(0)
 
 STRATEGIES = [
-    #"CombinedBinHAndCluc",
-    #"CombinedBinHAndClucV2",
-    #"CombinedBinHAndClucV5",
+    "CombinedBinHAndCluc",
+    "CombinedBinHAndClucV2",
+    "CombinedBinHAndClucV5",
     "CombinedBinHAndClucV6H",
     "CombinedBinHAndClucV7",
     "CombinedBinHAndClucV8",
     "CombinedBinHAndClucV8Hyper",
-    #"SMAOffset",
+    "SMAOffset",
     "SMAOffsetV2",
-    #"NostalgiaForInfinityV1",
+    "NostalgiaForInfinityV1",
     "NostalgiaForInfinityV2",
 ]
 
