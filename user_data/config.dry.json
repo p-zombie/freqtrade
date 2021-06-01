@@ -1,6 +1,6 @@
 {
     "dry_run": true,
-    "dry_run_wallet": 10000,
+    "dry_run_wallet": 1000,
     "max_open_trades": 5,
     "stake_currency": "USDT",
     "stake_amount": "unlimited",
@@ -39,6 +39,22 @@
         "pair_whitelist": [
         ],
         "pair_blacklist": [
+            ".*DOWN/BTC",
+            ".*UP/BTC",
+            ".*DOWN/ETH",
+            ".*UP/ETH",
+            ".*DOWN/USDT",
+            ".*UP/USDT",
+            ".*DOWN/BNB",
+            ".*UP/BNB",
+            ".*/BNB",
+            "BNB/.*",
+            ".*_PREMIUM",
+            ".*PERP",
+            ".*BULL/.*",
+            ".*BEAR/.*",
+            ".*BULL2021/.*",
+            ".*BEAR2021/.*",
             "GBP/USDT",
             "EUR/USDT",
             "CHF/USDT",
@@ -66,7 +82,14 @@
             "HTR/USDT",
             "HAI/USDT",
             "ETH/USDT",
-            "BTC/USDT"
+            "BTC/USDT",
+            "OG/USDT",
+            "HBAR/USDT",
+            "NMR/USDT",
+            "CHZ/USDT",
+            "XVS/USDT",
+            "CTXC/USDT",
+            "ZEN/USDT"
         ]
     },
     "pairlists": [
