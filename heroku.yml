@@ -12,5 +12,6 @@ build:
 run:
     web: freqtrade trade --config live.json --strategy $LIVE_STRATEGY --db-url $LIVE_DATABASE_URL
     dry:
-        command: freqtrade trade --config dry.json --strategy $DRY_STRATEGY --db-url $DRY_DATABASE_URL
+        command:
+          - freqtrade trade --config dry.json --strategy $DRY_STRATEGY --db-url $DRY_DATABASE_URL
         image: web
