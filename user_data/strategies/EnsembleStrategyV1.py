@@ -126,6 +126,11 @@ class EnsembleStrategyV1(IStrategy):
         logger.info(f"Buy stratrategies: {STRAT_COMBINATIONS[self.buy_strategies.value]}")
         logger.info(f"Sell stratrategies: {STRAT_COMBINATIONS[self.sell_strategies.value]}")
 
+    def informative_pairs(self):
+        pairs = self.dp.current_whitelist()
+        informative_pairs = [(pair, self.informative_timeframe) for pair in pairs]
+        return informative_pairs
+
     def get_strategy(self, strategy_name):
         cached_strategy = self.loaded_strategies.get(strategy_name)
         if cached_strategy:
