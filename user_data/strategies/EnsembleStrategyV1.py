@@ -118,6 +118,8 @@ class EnsembleStrategyV1(IStrategy):
     trailing_stop_positive_offset = 0.041
     trailing_only_offset_is_reached = True
 
+    process_only_new_candles = True
+
     def __init__(self, config: dict) -> None:
         super().__init__(config)
         logger.info(f"Buy stratrategies: {STRAT_COMBINATIONS[self.buy_strategies.value]}")
