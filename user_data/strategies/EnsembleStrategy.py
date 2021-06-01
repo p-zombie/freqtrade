@@ -1,16 +1,14 @@
-# --- Do not remove these libs ---
 from freqtrade.strategy import IStrategy, IntParameter, DecimalParameter
 import logging
 from pandas import DataFrame
 from freqtrade.resolvers import StrategyResolver
 from itertools import combinations
 from functools import reduce
-import numpy as np
 
 logger = logging.getLogger(__name__)
-np.random.seed(0)
 
 STRATEGIES = [
+    "AwesomeMacd",
     "CombinedBinHAndCluc",
     "CombinedBinHAndClucV2",
     "CombinedBinHAndClucV5",
@@ -22,6 +20,8 @@ STRATEGIES = [
     "SMAOffsetV2",
     "NostalgiaForInfinityV1",
     "NostalgiaForInfinityV2",
+    "Obelisk_Ichimoku_ZEMA_v1",
+    "TheRealPullbackV2",
 ]
 
 STRAT_COMBINATIONS = reduce(
@@ -30,30 +30,20 @@ STRAT_COMBINATIONS = reduce(
 
 
 class EnsembleStrategy(IStrategy):
-    stoploss = -0.99
+    loaded_strategies = {}
 
-    buy_params = {
-        "buy_strategies": 0,
-        "buy_mean_threshold": 0.5,
-    }
-    sell_params = {
-        "sell_strategies": 0,
-        "sell_mean_threshold": 0.5,
-    }
-
-    buy_mean_threshold = DecimalParameter(0.1, 0.9, default=0.5, load=True)
-    sell_mean_threshold = DecimalParameter(0.1, 0.9, default=0.5, load=True)
+    #  Default config uses mode from all strategies
+    buy_mean_threshold = DecimalParameter(0.0, 1, default=0.5, load=True)
+    sell_mean_threshold = DecimalParameter(0.0, 1, default=0.5, load=True)
     buy_strategies = IntParameter(0, len(STRAT_COMBINATIONS), default=0, load=True)
     sell_strategies = IntParameter(0, len(STRAT_COMBINATIONS), default=0, load=True)
 
-    loaded_strategies = {}
+    stoploss = -0.20
 
     def __init__(self, config: dict) -> None:
         super().__init__(config)
         logger.info(f"Buy stratrategies: {STRAT_COMBINATIONS[self.buy_strategies.value]}")
-        logger.info(f"Buy mean threshold: {self.buy_mean_threshold.value}")
         logger.info(f"Sell stratrategies: {STRAT_COMBINATIONS[self.sell_strategies.value]}")
-        logger.info(f"Sell mean threshold: {self.sell_mean_threshold.value}")
 
     def get_strategy(self, strategy_name):
         cached_strategy = self.loaded_strategies.get(strategy_name)
