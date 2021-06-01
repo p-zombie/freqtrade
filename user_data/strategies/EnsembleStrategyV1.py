@@ -126,6 +126,7 @@ class EnsembleStrategyV1(IStrategy):
     def get_strategy(self, strategy_name):
         cached_strategy = self.loaded_strategies.get(strategy_name)
         if cached_strategy:
+            cached_strategy.dp = self.dp
             return cached_strategy
 
         config = self.config
