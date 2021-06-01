@@ -40,7 +40,7 @@ test-all: # run backtest on all strats
 
 hyperopt: # run hyper opt
 	docker compose run --rm freqtrade \
-		freqtrade hyperopt --config test.json --hyperopt-loss $(LOSS) --spaces $(SPACES) --strategy $(STRATEGY) -e $(EPOCHS) --timerange=$(TIMERANGE) --timeframe=$(TIMEFRAME)
+		freqtrade hyperopt --config test.json --hyperopt-loss $(LOSS) --spaces $(SPACES) --strategy $(STRATEGY) -e $(EPOCHS) --timerange=$(TIMERANGE) --timeframe=$(TIMEFRAME) --random-state 42
 	osascript -e 'display notification "Done"'
 
 stop: # stop containers
