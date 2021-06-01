@@ -119,6 +119,7 @@ class EnsembleStrategyV1(IStrategy):
     trailing_only_offset_is_reached = True
 
     process_only_new_candles = True
+    informative_timeframe = '1h'
 
     def __init__(self, config: dict) -> None:
         super().__init__(config)
