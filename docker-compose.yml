@@ -13,3 +13,17 @@ services:
     ports:
        - "127.0.0.1:8080:8080"
     tty: true
+  lab:
+    build:
+      context: .
+      dockerfile: "./Dockerfile"
+    env_file: 
+      - .env
+    restart: unless-stopped
+    container_name: lab
+    ports:
+      - "127.0.0.1:8888:8888"
+    volumes:
+      - "./user_data:/freqtrade/user_data"
+    command: >
+      jupyter lab --port=8888 --ip 0.0.0.0 --allow-root

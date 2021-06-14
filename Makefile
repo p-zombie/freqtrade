@@ -5,6 +5,7 @@
 export
 
 STRATEGIES = $(shell ls user_data/strategies | sed "s/.py//g" | tr "\n" " ")
+TODAY = $(shell date +'%Y-%m-%d')
 all: help
 
 help: # show all commands
@@ -30,7 +31,8 @@ data: # download data
 
 test: # run backtest
 	docker compose run --rm freqtrade \
-		freqtrade backtesting --config test.json --strategy-list $(STRATEGY) --timeframe $(TIMEFRAME) --timerange=$(TIMERANGE)
+		freqtrade backtesting --config test.json --strategy-list $(STRATEGY) --timeframe $(TIMEFRAME) --timerange=$(TIMERANGE) \
+		--export=trades --export-filename=/freqtrade/user_data/backtest_results/$(TODAY).json
 	osascript -e 'display notification "Done"'
 
 test-all: # run backtest on all strats
@@ -51,3 +53,6 @@ logs: # tail logs for $APP
 
 output: # build output
 	heroku builds:output --app $(APP)
+
+lab: # run jupyterlab server
+	docker compose up lab
