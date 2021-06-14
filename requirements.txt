@@ -2,3 +2,5 @@ honcho
 psycopg2-binary
 ipdb
 jupyterlab
+matplotlib
+ipywidgets>=7.5
