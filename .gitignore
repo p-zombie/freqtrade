@@ -4,3 +4,4 @@ user_data/logs*
 user_data/*.sqlite
 user_data/hyperopt.lock
 user_data/hyperopt_results
+user_data/notebooks/.ipynb_checkpoints
