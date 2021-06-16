@@ -5,3 +5,5 @@ user_data/*.sqlite
 user_data/hyperopt.lock
 user_data/hyperopt_results
 user_data/notebooks/.ipynb_checkpoints
+user_data/strategies/.ipynb_checkpoints
+user_data/backtest_results/*

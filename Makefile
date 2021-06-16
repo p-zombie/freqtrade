@@ -9,7 +9,7 @@ TODAY = $(shell date +'%Y-%m-%d')
 all: help
 
 help: # show all commands
-	@sed -n 's/:.#/:/p' makefile | grep -v sed
+	@sed -n 's/:.*#/:/p' makefile | grep -v sed
 
 build: # update and build local image
 	docker compose pull && docker compose build
@@ -32,12 +32,12 @@ data: # download data
 test: # run backtest
 	docker compose run --rm freqtrade \
 		freqtrade backtesting --config test.json --strategy-list $(STRATEGY) --timeframe $(TIMEFRAME) --timerange=$(TIMERANGE) \
-		--export=trades --export-filename=/freqtrade/user_data/backtest_results/$(TODAY).json
+		--export=trades
 	osascript -e 'display notification "Done"'
 
 test-all: # run backtest on all strats
 	docker compose run --rm freqtrade \
-		freqtrade backtesting --config test.json --strategy-list $(STRATEGIES) --timerange=$(TIMERANGE) --timeframe $(TIMEFRAME)
+		freqtrade backtesting --config test.json --strategy-list $(STRATEGIES) --timerange=$(TIMERANGE) --timeframe $(TIMEFRAME) --export=trades
 	osascript -e 'display notification "Done"'
 
 hyperopt: # run hyper opt
