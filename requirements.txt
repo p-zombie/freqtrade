@@ -4,3 +4,5 @@ ipdb
 jupyterlab
 matplotlib
 ipywidgets>=7.5
+sklearn
+catboost
