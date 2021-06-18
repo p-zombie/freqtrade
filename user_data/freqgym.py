@@ -208,7 +208,7 @@ class TradingEnv(gym.Env):
 
         self.steps += 1
 
-        self.total_reward += self._reward * (self.steps / 100000)
+        self.total_reward += self._reward * (self.steps / 1000)
 
         # done = (self._reward < self.game_loss) # or (self.steps > self.day_step)
         # done = (self.total_reward < self.game_loss) or (self.total_reward > self.game_win) or (self.steps > self.day_step)
