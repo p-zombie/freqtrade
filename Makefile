@@ -4,7 +4,7 @@
 -include .env
 export
 
-STRATEGIES = $(shell ls user_data/strategies | sed "s/.py//g" | tr "\n" " ")
+STRATEGIES = $(shell ls user_data/strategies | sed "s/.py//g" | grep -v "IndicatorforRL" | grep -v "TrainCatBoostStrategy" | tr "\n" " ")
 TODAY = $(shell date +'%Y-%m-%d')
 all: help
 
@@ -12,7 +12,7 @@ help: # show all commands
 	@sed -n 's/:.*#/:/p' makefile | grep -v sed
 
 build: # update and build local image
-	docker compose pull && docker compose build
+	docker compose pull && docker compose build --progress=plain
 
 pairs: # pull pairs for $COIN
 	docker compose run --rm freqtrade \
@@ -23,7 +23,7 @@ list-data: # list data
 		freqtrade list-data --config test.json
 
 list-strats: # list strategies
-	@ls user_data/strategies
+	@echo $(STRATEGIES)
 
 data: # download data
 	docker compose run --rm freqtrade \
@@ -35,9 +35,14 @@ test: # run backtest
 		--export=trades
 	osascript -e 'display notification "Done"'
 
-test-all: # run backtest on all strats
+test-all: data # run backtest on all strats
 	docker compose run --rm freqtrade \
 		freqtrade backtesting --config test.json --strategy-list $(STRATEGIES) --timerange=$(TIMERANGE) --timeframe $(TIMEFRAME) --export=trades
+	osascript -e 'display notification "Done"'
+
+gym: # run rl env
+	docker compose run --rm freqtrade \
+		python /freqtrade/user_data/freqgym.py
 	osascript -e 'display notification "Done"'
 
 hyperopt: # run hyper opt
@@ -56,3 +61,6 @@ output: # build output
 
 lab: # run jupyterlab server
 	docker compose up lab
+
+tensorboard: # run tensorboard
+	docker compose up tensorboard

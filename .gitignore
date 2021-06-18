@@ -8,3 +8,4 @@ user_data/notebooks/.ipynb_checkpoints
 user_data/strategies/.ipynb_checkpoints
 user_data/backtest_results
 user_data/notebooks/catboost_info
+user_data/tensorboard

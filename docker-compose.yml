@@ -27,3 +27,16 @@ services:
       - "./user_data:/freqtrade/user_data"
     command: >
       jupyter lab --port=8888 --ip 0.0.0.0 --allow-root
+
+  tensorboard:
+    container_name: tensorboard
+    build:
+      context: .
+      dockerfile: "./Dockerfile"
+    env_file: 
+      - .env
+    volumes:
+      - "./user_data:/freqtrade/user_data"
+    ports:
+      - 6006:6006
+    command: tensorboard --host 0.0.0.0 --logdir=/freqtrade/user_data/tensorboard
