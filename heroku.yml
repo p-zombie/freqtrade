@@ -7,7 +7,7 @@ setup:
 
 build:
   docker:
-    web: Dockerfile
+    web: Dockerfile.heroku
 
 run:
     web: freqtrade trade --config live.json --strategy $LIVE_STRATEGY --db-url $LIVE_DATABASE_URL
