@@ -9,7 +9,7 @@
     "timeframe": "5m",
     "max_open_trades": 4,
     "stake_currency": "USDT",
-    "stake_amount": "unlimited",
+    "stake_amount": 100,
     "tradable_balance_ratio": 0.99,
     "fiat_display_currency": "USD",
     "cancel_open_orders_on_exit": false,

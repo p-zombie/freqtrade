@@ -44,6 +44,7 @@ class TradingEnv(gym.Env):
         # Trim startup period from analyzed dataframe
         dfs = []
         for pair, df in preprocessed.items():
+            df["pair"] = pair
             dfs.append(trim_dataframe(df, timerange))
         del preprocessed
         self.rest_idx = set()
@@ -85,7 +86,7 @@ class TradingEnv(gym.Env):
 
     def _next_observation(self):
         row = self.ticker[self.index]
-
+        self.pair = row.pair
         trad_status = 0
         if self.trade != None:
             trad_status = self.trade.calc_profit_ratio(rate=row.open)
@@ -207,7 +208,7 @@ class TradingEnv(gym.Env):
 
         self.steps += 1
 
-        self.total_reward += self._reward
+        self.total_reward += self._reward * (self.steps / 100000)
 
         # done = (self._reward < self.game_loss) # or (self.steps > self.day_step)
         # done = (self.total_reward < self.game_loss) or (self.total_reward > self.game_win) or (self.steps > self.day_step)
@@ -273,7 +274,7 @@ if __name__ == "__main__":
     from stable_baselines3 import PPO
     from stable_baselines3.ppo.policies import MlpPolicy
 
-    config = Configuration.from_files(['/freqtrade/rl.json'])
+    config = Configuration.from_files(['/freqtrade/test.json'])
     env = TradingEnv(config)
     model = PPO(
         MlpPolicy,
