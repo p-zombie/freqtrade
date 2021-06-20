@@ -64,3 +64,6 @@ lab: # run jupyterlab server
 
 tensorboard: # run tensorboard
 	docker compose up tensorboard
+
+shell: # run bash
+	docker compose run --rm freqtrade bash

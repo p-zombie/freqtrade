@@ -9,17 +9,23 @@ from stable_baselines3 import PPO
 
 
 class GymStrategy(IStrategy):
-    stoploss = -0.50
-
+    stoploss = -0.20
     trailing_stop = False
-
     ticker_interval = '5m'
-
     process_only_new_candles = False
-
     startup_candle_count: int = 20
+    model = None
 
-    model = PPO.load('/freqtrade/user_data/model.gym')
+    def __init__(self, config: dict) -> None:
+        super().__init__(config)
+        self._load_model()
+
+    def _load_model(self):
+        try:
+            self.model = PPO.load('/freqtrade/user_data/model.gym')
+        except FileNotFoundError:
+            # model does not exist yet, generate one using freqgym.py
+            pass
 
     def informative_pairs(self):
         pairs = self.dp.current_whitelist()

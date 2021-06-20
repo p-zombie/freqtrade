@@ -16,9 +16,8 @@ from freqtrade.exchange import timeframe_to_minutes, timeframe_to_seconds
 from freqtrade.persistence import Trade
 from freqtrade.configuration import Configuration
 
-logging.basicConfig(level=logging.DEBUG)
+logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
-logger.setLevel(logging.DEBUG)
 
 
 class TradingEnv(gym.Env):
@@ -176,7 +175,7 @@ class TradingEnv(gym.Env):
                     "total": self.status.open
                 })
 
-                logger.debug("{} - Backtesting emulates creation of new trade: {}.".format(
+                logger.info("{} - Backtesting emulates creation of new trade: {}.".format(
                     self.pair, self.trade))
 
         # Sell
@@ -208,7 +207,7 @@ class TradingEnv(gym.Env):
 
         self.steps += 1
 
-        self.total_reward += self._reward * (self.steps / 1000)
+        self.total_reward += self._reward * (self.steps / 100000)
 
         # done = (self._reward < self.game_loss) # or (self.steps > self.day_step)
         # done = (self.total_reward < self.game_loss) or (self.total_reward > self.game_win) or (self.steps > self.day_step)
@@ -279,9 +278,8 @@ if __name__ == "__main__":
     model = PPO(
         MlpPolicy,
         env,
-        #learning_rate=1e-4,
-        verbose=0,
+        verbose=1,
         tensorboard_log="/freqtrade/user_data/tensorboard/"
     )
-    model.learn(total_timesteps=10000)
+    model.learn(total_timesteps=1000000)
     model.save('/freqtrade/user_data/model.gym')
