@@ -10,8 +10,8 @@ build:
     web: Dockerfile.heroku
 
 run:
-    web: freqtrade trade --config live.json --strategy $LIVE_STRATEGY --db-url $LIVE_DATABASE_URL
+    web: freqtrade trade --config live.json
     dry:
         command:
-          - freqtrade trade --config dry.json --strategy $DRY_STRATEGY --db-url $DRY_DATABASE_URL
+          - freqtrade trade --config dry.json
         image: web
