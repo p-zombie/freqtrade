@@ -47,7 +47,7 @@ gym: # run rl env
 
 hyperopt: data # run hyper opt
 	docker compose run --rm freqtrade \
-		freqtrade hyperopt --config test.json --hyperopt-loss $(LOSS) --spaces $(SPACES) --strategy $(STRATEGY) -e $(EPOCHS) --timerange=$(TIMERANGE) --timeframe=$(TIMEFRAME) --random-state 42
+		freqtrade hyperopt --config test.json --hyperopt-loss $(LOSS) --spaces $(SPACES) --strategy $(STRATEGY) -e $(EPOCHS) --timerange=$(TIMERANGE) --timeframe=$(TIMEFRAME) --random-state 42 -j 1
 	osascript -e 'display notification "Done"'
 
 stop: # stop containers
