@@ -1,5 +1,5 @@
 {
-    "strategy": "NostalgiaForInfinityV4",
+    "strategy": "NostalgiaForInfinityV5",
     "db_url": "$LIVE_DATABASE_URL",
     "dry_run": false,
     "timeframe": "5m",

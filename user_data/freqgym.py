@@ -175,7 +175,7 @@ class TradingEnv(gym.Env):
                     "total": self.status.open
                 })
 
-                logger.info("{} - Backtesting emulates creation of new trade: {}.".format(
+                logger.debug("{} - Backtesting emulates creation of new trade: {}.".format(
                     self.pair, self.trade))
 
         # Sell
@@ -234,9 +234,9 @@ class TradingEnv(gym.Env):
         return self._next_observation()
 
     def render(self, mode='live', close=False):
-        # Render the environment to the screen
-        print(f'Step: {self.index}')
-        print(f'Reward: {self._reward}')
+        logger.info(f"Step: {self.index}")
+        logger.info(f"Reward: {self._reward}")
+        logger.info(f"Total Reward: {self.total_reward}")
 
     def load_bt_data(self):
         timerange = TimeRange.parse_timerange(self.config['gym_parameters']['timerange'])
@@ -278,8 +278,8 @@ if __name__ == "__main__":
     model = PPO(
         MlpPolicy,
         env,
-        verbose=1,
+        verbose=0,
         tensorboard_log="/freqtrade/user_data/tensorboard/"
     )
-    model.learn(total_timesteps=1000000)
+    model.learn(total_timesteps=1_000_000)
     model.save('/freqtrade/user_data/model.gym')
