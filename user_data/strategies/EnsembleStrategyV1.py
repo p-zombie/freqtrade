@@ -163,7 +163,6 @@ class EnsembleStrategyV1(IStrategy):
 
     def populate_sell_trend(self, dataframe: DataFrame, metadata: dict) -> DataFrame:
         strategies = STRAT_COMBINATIONS[self.sell_strategies.value]
-        strategies = STRATEGIES
         for strategy_name in strategies:
             strategy = self.get_strategy(strategy_name)
             strategy_indicators = strategy.advise_indicators(dataframe, metadata)
