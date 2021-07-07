@@ -1,11 +1,11 @@
 {
-    "strategy": "NostalgiaForInfinityV5",
+    "strategy": "NostalgiaForInfinityV7",
     "db_url": "$LIVE_DATABASE_URL",
     "dry_run": false,
     "timeframe": "5m",
-    "max_open_trades": 5,
+    "max_open_trades": 6,
     "stake_currency": "USDT",
-    "stake_amount": 100,
+    "stake_amount": "unlimited",
     "tradable_balance_ratio": 0.99,
     "fiat_display_currency": "USD",
     "cancel_open_orders_on_exit": false,
@@ -58,7 +58,7 @@
     "pairlists": [
         {
             "method": "VolumePairList",
-            "number_assets": 100,
+            "number_assets": 70,
             "sort_key": "quoteVolume",
             "refresh_period": 1800
         },
