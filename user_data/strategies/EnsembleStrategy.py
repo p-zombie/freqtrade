@@ -4,8 +4,19 @@ from pandas import DataFrame
 from freqtrade.resolvers import StrategyResolver
 from itertools import combinations
 from functools import reduce
-
+from functools import wraps
 logger = logging.getLogger(__name__)
+
+
+def suspend_logging(func):
+    @wraps(func)
+    def inner(*args, **kwargs):
+        previousloglevel = logger.getEffectiveLevel()
+        try:
+            return func(*args, **kwargs)
+        finally:
+            logger.setLevel(previousloglevel)
+    return inner
 
 
 STRATEGIES = [
@@ -23,6 +34,7 @@ STRATEGIES = [
     "NostalgiaForInfinityV3",
     "NostalgiaForInfinityV4",
     "NostalgiaForInfinityV5",
+    "NostalgiaForInfinityV7",
 ]
 
 STRAT_COMBINATIONS = reduce(
@@ -35,11 +47,27 @@ MAX_COMBINATIONS = len(STRAT_COMBINATIONS) - 1
 class EnsembleStrategy(IStrategy):
     loaded_strategies = {}
 
-    stoploss = -0.20
-    buy_mean_threshold = DecimalParameter(0.0, 1, default=0.5, load=True)
-    sell_mean_threshold = DecimalParameter(0.0, 1, default=0.5, load=True)
-    buy_strategies = IntParameter(0, MAX_COMBINATIONS, default=0, load=True)
-    sell_strategies = IntParameter(0, MAX_COMBINATIONS, default=0, load=True)
+    buy_mean_threshold = DecimalParameter(0.0, 1, default=0.302, load=True)
+    sell_mean_threshold = DecimalParameter(0.0, 1, default=0.142, load=True)
+    buy_strategies = IntParameter(0, MAX_COMBINATIONS, default=8914, load=True)
+    sell_strategies = IntParameter(0, MAX_COMBINATIONS, default=3369, load=True)
+
+    # ROI table:
+    minimal_roi = {
+        "0": 0.137,
+        "15": 0.073,
+        "33": 0.011,
+        "107": 0
+    }
+
+    # Stoploss:
+    stoploss = -0.138
+
+    # Trailing stop:
+    trailing_stop = True
+    trailing_stop_positive = 0.15
+    trailing_stop_positive_offset = 0.221
+    trailing_only_offset_is_reached = False
 
     def __init__(self, config: dict) -> None:
         super().__init__(config)
@@ -51,6 +79,7 @@ class EnsembleStrategy(IStrategy):
         informative_pairs = [(pair, self.informative_timeframe) for pair in pairs]
         return informative_pairs
 
+    @suspend_logging
     def get_strategy(self, strategy_name):
         strategy = self.loaded_strategies.get(strategy_name)
         if not strategy:
@@ -75,7 +104,7 @@ class EnsembleStrategy(IStrategy):
                 strategy_indicators, metadata
             )["buy"]
             values = dataframe[f"strat_buy_signal_{strategy_name}"].tolist()
-            logger.info(f"buy_signals_{strategy_name}: {values}")
+            logger.debug(f"buy_signals_{strategy_name}: {values}")
 
         dataframe['buy'] = (
             dataframe.filter(like='strat_buy_signal_').mean(axis=1) > self.buy_mean_threshold.value
@@ -91,7 +120,7 @@ class EnsembleStrategy(IStrategy):
                 strategy_indicators, metadata
             )["sell"]
             values = dataframe[f"strat_sell_signal_{strategy_name}"].tolist()
-            logger.info(f"sell_signals_{strategy_name}: {values}")
+            logger.debug(f"sell_signals_{strategy_name}: {values}")
 
         dataframe['sell'] = (
             dataframe.filter(like='strat_sell_signal_').mean(axis=1) > self.sell_mean_threshold.value
