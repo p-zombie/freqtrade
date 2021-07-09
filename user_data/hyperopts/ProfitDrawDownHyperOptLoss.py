@@ -3,7 +3,8 @@ from freqtrade.optimize.hyperopt import IHyperOptLoss
 from freqtrade.data.btanalysis import calculate_max_drawdown
 
 # higher numbers penalize drawdowns more severely
-DRAWDOWN_MULT = 0.5 #0.25
+DRAWDOWN_MULT = 0.5
+
 
 class ProfitDrawDownHyperOptLoss(IHyperOptLoss):
 
