@@ -52,22 +52,34 @@ class EnsembleStrategy(IStrategy):
     buy_strategies = IntParameter(0, MAX_COMBINATIONS, default=8914, load=True)
     sell_strategies = IntParameter(0, MAX_COMBINATIONS, default=3369, load=True)
 
+    # Buy hyperspace params:
+    buy_params = {
+        "buy_mean_threshold": 0.032,
+        "buy_strategies": 30080,
+    }
+
+    # Sell hyperspace params:
+    sell_params = {
+        "sell_mean_threshold": 0.059,
+        "sell_strategies": 21678,
+    }
+
     # ROI table:
     minimal_roi = {
-        "0": 0.137,
-        "15": 0.073,
-        "33": 0.011,
-        "107": 0
+        "0": 0.22,
+        "37": 0.073,
+        "86": 0.016,
+        "195": 0
     }
 
     # Stoploss:
-    stoploss = -0.138
+    stoploss = -0.148
 
     # Trailing stop:
     trailing_stop = True
-    trailing_stop_positive = 0.15
-    trailing_stop_positive_offset = 0.221
-    trailing_only_offset_is_reached = False
+    trailing_stop_positive = 0.068
+    trailing_stop_positive_offset = 0.081
+    trailing_only_offset_is_reached = True
 
     def __init__(self, config: dict) -> None:
         super().__init__(config)
@@ -79,7 +91,6 @@ class EnsembleStrategy(IStrategy):
         informative_pairs = [(pair, self.informative_timeframe) for pair in pairs]
         return informative_pairs
 
-    @suspend_logging
     def get_strategy(self, strategy_name):
         strategy = self.loaded_strategies.get(strategy_name)
         if not strategy:
@@ -104,7 +115,7 @@ class EnsembleStrategy(IStrategy):
                 strategy_indicators, metadata
             )["buy"]
             values = dataframe[f"strat_buy_signal_{strategy_name}"].tolist()
-            logger.debug(f"buy_signals_{strategy_name}: {values}")
+            logger.info(f"buy_signals_{strategy_name}: {values}")
 
         dataframe['buy'] = (
             dataframe.filter(like='strat_buy_signal_').mean(axis=1) > self.buy_mean_threshold.value
@@ -120,7 +131,7 @@ class EnsembleStrategy(IStrategy):
                 strategy_indicators, metadata
             )["sell"]
             values = dataframe[f"strat_sell_signal_{strategy_name}"].tolist()
-            logger.debug(f"sell_signals_{strategy_name}: {values}")
+            logger.info(f"sell_signals_{strategy_name}: {values}")
 
         dataframe['sell'] = (
             dataframe.filter(like='strat_sell_signal_').mean(axis=1) > self.sell_mean_threshold.value

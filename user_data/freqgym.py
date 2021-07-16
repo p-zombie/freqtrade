@@ -28,10 +28,10 @@ class TradingEnv(gym.Env):
         super(TradingEnv, self).__init__()
 
         self.config = config
-        self.config['strategy'] = self.config['gym_parameters']['indicator_strategy']
+        self.config['strategy'] = self.config['gym']['indicator_strategy']
         self.strategy = StrategyResolver.load_strategy(self.config)
-        self.fee = self.config['gym_parameters']['fee']
-        self.timeframe = str(config.get('timeframe'))
+        self.fee = self.config['gym']['fee']
+        self.timeframe = self.config["gym"]["timeframe"]
         self.timeframe_min = timeframe_to_minutes(self.timeframe)
         self.required_startup = self.strategy.startup_candle_count
 
@@ -75,7 +75,7 @@ class TradingEnv(gym.Env):
         self.not_complete_trade_decay = 0.5
         self.game_loss = -0.5
         self.game_win = 1.0
-        self.simulate_length = self.config['gym_parameters']['simulate_length']
+        self.simulate_length = self.config['gym']['simulate_length']
 
         # Actions
         self.action_space = spaces.Discrete(3)
@@ -239,7 +239,7 @@ class TradingEnv(gym.Env):
         logger.info(f"Total Reward: {self.total_reward}")
 
     def load_bt_data(self):
-        timerange = TimeRange.parse_timerange(self.config['gym_parameters']['timerange'])
+        timerange = TimeRange.parse_timerange(self.config['gym']['timerange'])
 
         data = history.load_data(
             datadir=self.config['datadir'],

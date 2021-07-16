@@ -1,9 +1,10 @@
 {
-    "gym_parameters": {
+    "gym": {
         "indicator_strategy": "GymStrategy",
         "fee": 0.01,
-        "timerange": "20210610-20210626",
-        "simulate_length": 200
+        "timerange": "20210713-20210715",
+        "simulate_length": 1000,
+        "timeframe": "1m"
     },
     "dry_run": true,
     "timeframe": "5m",
