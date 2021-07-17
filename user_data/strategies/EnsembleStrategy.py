@@ -48,10 +48,10 @@ class EnsembleStrategy(IStrategy):
     loaded_strategies = {}
 
     informative_timeframe = '1h'
-    buy_mean_threshold = DecimalParameter(0.0, 1, default=0.302, load=True)
-    sell_mean_threshold = DecimalParameter(0.0, 1, default=0.142, load=True)
-    buy_strategies = IntParameter(0, MAX_COMBINATIONS, default=8914, load=True)
-    sell_strategies = IntParameter(0, MAX_COMBINATIONS, default=3369, load=True)
+    buy_mean_threshold = DecimalParameter(0.0, 1, default=0.032, load=True)
+    sell_mean_threshold = DecimalParameter(0.0, 1, default=0.059, load=True)
+    buy_strategies = IntParameter(0, MAX_COMBINATIONS, default=30080, load=True)
+    sell_strategies = IntParameter(0, MAX_COMBINATIONS, default=21678, load=True)
 
     # Buy hyperspace params:
     buy_params = {
