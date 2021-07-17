@@ -115,11 +115,11 @@ class EnsembleStrategy(IStrategy):
             dataframe[f"strat_buy_signal_{strategy_name}"] = strategy.advise_buy(
                 strategy_indicators, metadata
             )["buy"]
-            values = dataframe[f"strat_buy_signal_{strategy_name}"].tolist()
+            values = dataframe[f"strat_buy_signal_{strategy_name}"].fillna(0).tolist()
             logger.info(f"buy_signals_{strategy_name}: {values}")
 
         dataframe['buy'] = (
-            dataframe.filter(like='strat_buy_signal_').mean(axis=1) > self.buy_mean_threshold.value
+            dataframe.filter(like='strat_buy_signal_').fillna(0).mean(axis=1) > self.buy_mean_threshold.value
         ).astype(int)
         return dataframe
 
@@ -131,10 +131,10 @@ class EnsembleStrategy(IStrategy):
             dataframe[f"strat_sell_signal_{strategy_name}"] = strategy.advise_sell(
                 strategy_indicators, metadata
             )["sell"]
-            values = dataframe[f"strat_sell_signal_{strategy_name}"].tolist()
+            values = dataframe[f"strat_sell_signal_{strategy_name}"].fillna(0).tolist()
             logger.info(f"sell_signals_{strategy_name}: {values}")
 
         dataframe['sell'] = (
-            dataframe.filter(like='strat_sell_signal_').mean(axis=1) > self.sell_mean_threshold.value
+            dataframe.filter(like='strat_sell_signal_').fillna(0).mean(axis=1) > self.sell_mean_threshold.value
         ).astype(int)
         return dataframe
