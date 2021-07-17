@@ -67,3 +67,7 @@ tensorboard: # run tensorboard
 
 shell: # run bash
 	docker compose run --rm freqtrade bash
+
+dry: # run dry mode
+	docker compose run --rm freqtrade \
+		freqtrade trade --config dry.json --verbose
