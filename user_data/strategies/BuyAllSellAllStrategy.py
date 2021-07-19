@@ -1,10 +1,16 @@
 from freqtrade.strategy.interface import IStrategy
 from pandas import DataFrame
+from freqtrade.persistence import Trade
+from datetime import datetime
 
 
 class BuyAllSellAllStrategy(IStrategy):
     stoploss = -0.25
     timeframe = '5m'
+
+    use_sell_signal = True
+    sell_profit_only = False
+    ignore_roi_if_buy_signal = True
 
     def populate_indicators(self, dataframe: DataFrame, metadata: dict) -> DataFrame:
         return dataframe
@@ -14,5 +20,14 @@ class BuyAllSellAllStrategy(IStrategy):
         return dataframe
 
     def populate_sell_trend(self, dataframe: DataFrame, metadata: dict) -> DataFrame:
-        dataframe["sell"] = 1
+        dataframe["sell"] = 0
         return dataframe
+
+    def custom_sell(
+        self, pair: str, trade: 'Trade', current_time: 'datetime', current_rate: float, current_profit: float, **kwargs
+    ) -> float:
+        dataframe, _ = self.dp.get_analyzed_dataframe(pair, self.timeframe)
+        last_candle = dataframe.iloc[-1].squeeze()
+        if (last_candle is not None):
+            return True
+        return None

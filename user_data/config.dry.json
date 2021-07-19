@@ -1,5 +1,5 @@
 {
-    "strategy": "BuyAllSellAllStrategy",
+    "strategy": "EnsembleStrategy",
     "db_url": "$DRY_DATABASE_URL",
     "dry_run": true,
     "dry_run_wallet": 1000,
