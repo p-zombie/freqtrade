@@ -2,6 +2,7 @@ from freqtrade.strategy.interface import IStrategy
 from pandas import DataFrame
 from freqtrade.persistence import Trade
 from datetime import datetime
+import numpy as np
 
 
 class BuyAllSellAllStrategy(IStrategy):
@@ -10,13 +11,13 @@ class BuyAllSellAllStrategy(IStrategy):
 
     use_sell_signal = True
     sell_profit_only = False
-    ignore_roi_if_buy_signal = True
+    ignore_roi_if_buy_signal = False
 
     def populate_indicators(self, dataframe: DataFrame, metadata: dict) -> DataFrame:
         return dataframe
 
     def populate_buy_trend(self, dataframe: DataFrame, metadata: dict) -> DataFrame:
-        dataframe["buy"] = 1
+        dataframe["buy"] = np.random.randint(0, 2, size=len(dataframe))
         return dataframe
 
     def populate_sell_trend(self, dataframe: DataFrame, metadata: dict) -> DataFrame:
