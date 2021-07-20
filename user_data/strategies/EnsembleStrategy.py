@@ -4,19 +4,10 @@ from pandas import DataFrame
 from freqtrade.resolvers import StrategyResolver
 from itertools import combinations
 from functools import reduce
-from functools import wraps
+from freqtrade.persistence import Trade
+from datetime import datetime
+
 logger = logging.getLogger(__name__)
-
-
-def suspend_logging(func):
-    @wraps(func)
-    def inner(*args, **kwargs):
-        previousloglevel = logger.getEffectiveLevel()
-        try:
-            return func(*args, **kwargs)
-        finally:
-            logger.setLevel(previousloglevel)
-    return inner
 
 
 STRATEGIES = [
@@ -46,6 +37,10 @@ MAX_COMBINATIONS = len(STRAT_COMBINATIONS) - 1
 
 class EnsembleStrategy(IStrategy):
     loaded_strategies = {}
+
+    use_sell_signal = True
+    sell_profit_only = False
+    ignore_roi_if_buy_signal = False
 
     informative_timeframe = '1h'
     buy_mean_threshold = DecimalParameter(0.0, 1, default=0.032, load=True)
@@ -105,6 +100,7 @@ class EnsembleStrategy(IStrategy):
         return strategy
 
     def populate_indicators(self, dataframe: DataFrame, metadata: dict) -> DataFrame:
+        # TODO: move all strats signals to here, add mean and difference mean for buy and sell
         return dataframe
 
     def populate_buy_trend(self, dataframe: DataFrame, metadata: dict) -> DataFrame:
@@ -122,15 +118,28 @@ class EnsembleStrategy(IStrategy):
         return dataframe
 
     def populate_sell_trend(self, dataframe: DataFrame, metadata: dict) -> DataFrame:
-        strategies = STRAT_COMBINATIONS[self.sell_strategies.value]
-        for strategy_name in strategies:
-            strategy = self.get_strategy(strategy_name)
-            strategy_indicators = strategy.advise_indicators(dataframe, metadata)
-            dataframe[f"strat_sell_signal_{strategy_name}"] = strategy.advise_sell(
-                strategy_indicators, metadata
-            )["sell"]
-
-        dataframe['sell'] = (
-            dataframe.filter(like='strat_sell_signal_').fillna(0).mean(axis=1) > self.sell_mean_threshold.value
-        ).astype(int)
+        dataframe["sell"] = 0
         return dataframe
+
+    def custom_sell(
+        self, pair: str, trade: 'Trade', current_time: 'datetime', current_rate: float, current_profit: float, **kwargs
+    ) -> float:
+        dataframe, _ = self.dp.get_analyzed_dataframe(pair, self.timeframe)
+        last_candle = dataframe.iloc[-1].squeeze()
+        if (last_candle is not None):
+            strategies = STRAT_COMBINATIONS[self.sell_strategies.value]
+            metadata = {"pair": pair}
+            for strategy_name in strategies:
+                strategy = self.get_strategy(strategy_name)
+                strategy_indicators = strategy.advise_indicators(dataframe, metadata)
+                dataframe[f"strat_sell_signal_{strategy_name}"] = strategy.advise_sell(
+                    strategy_indicators, metadata
+                )["sell"]
+
+            dataframe['sell'] = (
+                dataframe.filter(like='strat_sell_signal_').fillna(0).mean(axis=1) > self.sell_mean_threshold.value
+            ).astype(int)
+            last_candle = dataframe.iloc[-1].squeeze()
+            return last_candle.sell
+
+        return None

@@ -32,7 +32,7 @@ data: # download data
 test: # run backtest
 	docker compose run --rm freqtrade \
 		freqtrade backtesting --config test.json --strategy-list $(STRATEGY) --timeframe $(TIMEFRAME) --timerange=$(TIMERANGE) \
-		--export=trades --verbose
+		--export=trades
 	osascript -e 'display notification "Done"'
 
 test-all: data # run backtest on all strats
@@ -70,4 +70,4 @@ shell: # run bash
 
 dry: # run dry mode
 	docker compose run --rm freqtrade \
-		freqtrade trade --config dry.json --verbose
+		freqtrade trade --config dry.json
