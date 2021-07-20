@@ -13,5 +13,5 @@ run:
     web: freqtrade trade --config live.json
     dry:
         command:
-          - freqtrade trade --config dry.json --verbose
+          - freqtrade trade --config dry.json
         image: web
