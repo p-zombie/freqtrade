@@ -107,10 +107,13 @@ class EnsembleStrategy(IStrategy):
         strategies = STRAT_COMBINATIONS[self.buy_strategies.value]
         for strategy_name in strategies:
             strategy = self.get_strategy(strategy_name)
-            strategy_indicators = strategy.advise_indicators(dataframe, metadata)
-            dataframe[f"strat_buy_signal_{strategy_name}"] = strategy.advise_buy(
-                strategy_indicators, metadata
-            )["buy"]
+            try:
+                strategy_indicators = strategy.advise_indicators(dataframe, metadata)
+                dataframe[f"strat_buy_signal_{strategy_name}"] = strategy.advise_buy(
+                    strategy_indicators, metadata
+                )["buy"]
+            except Exception:
+                pass
 
         dataframe['buy'] = (
             dataframe.filter(like='strat_buy_signal_').fillna(0).mean(axis=1) > self.buy_mean_threshold.value
@@ -131,10 +134,13 @@ class EnsembleStrategy(IStrategy):
             metadata = {"pair": pair}
             for strategy_name in strategies:
                 strategy = self.get_strategy(strategy_name)
-                strategy_indicators = strategy.advise_indicators(dataframe, metadata)
-                dataframe[f"strat_sell_signal_{strategy_name}"] = strategy.advise_sell(
-                    strategy_indicators, metadata
-                )["sell"]
+                try:
+                    strategy_indicators = strategy.advise_indicators(dataframe, metadata)
+                    dataframe[f"strat_sell_signal_{strategy_name}"] = strategy.advise_sell(
+                        strategy_indicators, metadata
+                    )["sell"]
+                except Exception:
+                    pass
 
             dataframe['sell'] = (
                 dataframe.filter(like='strat_sell_signal_').fillna(0).mean(axis=1) > self.sell_mean_threshold.value
