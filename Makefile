@@ -4,7 +4,7 @@
 -include .env
 export
 
-STRATEGIES = $(shell ls user_data/strategies | sed "s/.py//g" | grep -v "IndicatorforRL" | grep -v "TrainCatBoostStrategy" | tr "\n" " ")
+STRATEGIES = $(shell ls user_data/strategies | grep py | sed "s/.py//g" | grep -v "IndicatorforRL" | grep -v "TrainCatBoostStrategy" | grep -v "Nostalgia" | grep -v "Ensemble" | tr "\n" " ")
 TODAY = $(shell date +'%Y-%m-%d')
 all: help
 

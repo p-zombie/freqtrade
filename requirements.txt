@@ -3,3 +3,4 @@ psycopg2-binary
 ipdb
 sklearn
 catboost
+pandas_ta
