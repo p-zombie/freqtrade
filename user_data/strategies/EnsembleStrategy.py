@@ -1,14 +1,11 @@
-from freqtrade.strategy import IStrategy, IntParameter, DecimalParameter
+from freqtrade.strategy import IStrategy, DecimalParameter, IntParameter
 import logging
 from pandas import DataFrame
 from freqtrade.resolvers import StrategyResolver
 from itertools import combinations
 from functools import reduce
-from freqtrade.persistence import Trade
-from datetime import datetime
 
 logger = logging.getLogger(__name__)
-
 
 STRATEGIES = [
     "CombinedBinHAndCluc",
@@ -29,58 +26,49 @@ STRATEGIES = [
 ]
 
 STRAT_COMBINATIONS = reduce(
-    lambda x, y: list(combinations(STRATEGIES, y)) + x, range(len(STRATEGIES)+1), []
+    lambda x, y: list(combinations(STRATEGIES, y)) + x, range(len(STRATEGIES) + 1), []
 )
 
-MAX_COMBINATIONS = len(STRAT_COMBINATIONS) - 1
+MAX_COMBINATIONS = len(STRAT_COMBINATIONS) - 2
 
 
 class EnsembleStrategy(IStrategy):
     loaded_strategies = {}
+    informative_timeframe = "1h"
 
-    use_sell_signal = True
-    sell_profit_only = False
+    use_sell_signal = False
     ignore_roi_if_buy_signal = False
+    sell_profit_only = False
 
-    informative_timeframe = '1h'
-    buy_mean_threshold = DecimalParameter(0.0, 1, default=0.032, load=True)
-    sell_mean_threshold = DecimalParameter(0.0, 1, default=0.059, load=True)
-    buy_strategies = IntParameter(0, MAX_COMBINATIONS, default=30080, load=True)
-    sell_strategies = IntParameter(0, MAX_COMBINATIONS, default=21678, load=True)
+    buy_action_diff_threshold = DecimalParameter(0, 1, default=0, decimals=2, optimize=True, load=True)
+    buy_strategies = IntParameter(0, MAX_COMBINATIONS, default=0, optimize=True, load=True)
 
-    # Buy hyperspace params:
+    stoploss = -0.3
+
     buy_params = {
-        "buy_mean_threshold": 0.032,
-        "buy_strategies": 30080,
+        "buy_action_diff_threshold": 0,
+        "buy_strategies": 5697,
     }
 
-    # Sell hyperspace params:
-    sell_params = {
-        "sell_mean_threshold": 0.059,
-        "sell_strategies": 21678,
-    }
+    sell_params = {}
 
     # ROI table:
     minimal_roi = {
-        "0": 0.22,
-        "37": 0.073,
-        "86": 0.016,
-        "195": 0
+        "0": 0.187,
+        "23": 0.043,
+        "72": 0.011,
+        "163": 0
     }
-
-    # Stoploss:
-    stoploss = -0.148
 
     # Trailing stop:
     trailing_stop = True
-    trailing_stop_positive = 0.068
-    trailing_stop_positive_offset = 0.081
-    trailing_only_offset_is_reached = True
+    trailing_stop_positive = 0.074
+    trailing_stop_positive_offset = 0.121
+    trailing_only_offset_is_reached = False
 
     def __init__(self, config: dict) -> None:
         super().__init__(config)
         logger.info(f"Buy stratrategies: {STRAT_COMBINATIONS[self.buy_strategies.value]}")
-        logger.info(f"Sell stratrategies: {STRAT_COMBINATIONS[self.sell_strategies.value]}")
 
     def informative_pairs(self):
         pairs = self.dp.current_whitelist()
@@ -100,52 +88,25 @@ class EnsembleStrategy(IStrategy):
         return strategy
 
     def populate_indicators(self, dataframe: DataFrame, metadata: dict) -> DataFrame:
-        # TODO: move all strats signals to here, add mean and difference mean for buy and sell
+        strategies = STRATEGIES
+        for strategy_name in strategies:
+            strategy = self.get_strategy(strategy_name)
+            strategy_indicators = strategy.advise_indicators(dataframe, metadata)
+            dataframe[f"buy_signal_{strategy_name}"] = strategy.advise_buy(
+                strategy_indicators, metadata
+            )["buy"]
+
+        buy_strategies = STRAT_COMBINATIONS[self.buy_strategies.value]
+        buy_strategies = [f"buy_signal_{name}" for name in buy_strategies]
+
+        dataframe["buy_mean"] = dataframe[buy_strategies].fillna(0).mean(axis=1)
         return dataframe
 
     def populate_buy_trend(self, dataframe: DataFrame, metadata: dict) -> DataFrame:
-        strategies = STRAT_COMBINATIONS[self.buy_strategies.value]
-        for strategy_name in strategies:
-            strategy = self.get_strategy(strategy_name)
-            try:
-                strategy_indicators = strategy.advise_indicators(dataframe, metadata)
-                dataframe[f"strat_buy_signal_{strategy_name}"] = strategy.advise_buy(
-                    strategy_indicators, metadata
-                )["buy"]
-            except Exception:
-                pass
-
-        dataframe['buy'] = (
-            dataframe.filter(like='strat_buy_signal_').fillna(0).mean(axis=1) > self.buy_mean_threshold.value
+        dataframe["buy"] = (
+            dataframe["buy_mean"] > self.buy_action_diff_threshold.value
         ).astype(int)
         return dataframe
 
     def populate_sell_trend(self, dataframe: DataFrame, metadata: dict) -> DataFrame:
-        dataframe["sell"] = 0
         return dataframe
-
-    def custom_sell(
-        self, pair: str, trade: 'Trade', current_time: 'datetime', current_rate: float, current_profit: float, **kwargs
-    ) -> float:
-        dataframe, _ = self.dp.get_analyzed_dataframe(pair, self.timeframe)
-        last_candle = dataframe.iloc[-1].squeeze()
-        if (last_candle is not None):
-            strategies = STRAT_COMBINATIONS[self.sell_strategies.value]
-            metadata = {"pair": pair}
-            for strategy_name in strategies:
-                strategy = self.get_strategy(strategy_name)
-                try:
-                    strategy_indicators = strategy.advise_indicators(dataframe, metadata)
-                    dataframe[f"strat_sell_signal_{strategy_name}"] = strategy.advise_sell(
-                        strategy_indicators, metadata
-                    )["sell"]
-                except Exception:
-                    pass
-
-            dataframe['sell'] = (
-                dataframe.filter(like='strat_sell_signal_').fillna(0).mean(axis=1) > self.sell_mean_threshold.value
-            ).astype(int)
-            last_candle = dataframe.iloc[-1].squeeze()
-            return last_candle.sell
-
-        return None
