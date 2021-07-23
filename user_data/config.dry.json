@@ -74,11 +74,10 @@
         },
         {
             "method": "VolumePairList",
-            "number_assets": 100,
+            "number_assets": 50,
             "sort_key": "quoteVolume"
         },
-        {"method": "PerformanceFilter"}	
-
+        {"method": "PerformanceFilter"}
 	],
     "edge": {
         "enabled": false,
