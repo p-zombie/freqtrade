@@ -1,9 +1,9 @@
 {
-    "strategy": "NostalgiaForInfinityNext",
+    "strategy": "EnsembleStrategy",
     "db_url": "$LIVE_DATABASE_URL",
     "dry_run": false,
     "timeframe": "5m",
-    "max_open_trades": 5,
+    "max_open_trades": 15,
     "stake_currency": "USDT",
     "stake_amount": "unlimited",
     "tradable_balance_ratio": 0.99,
@@ -58,7 +58,7 @@
     "pairlists": [
         {
             "method": "VolumePairList",
-            "number_assets": 70,
+            "number_assets": 50,
             "sort_key": "quoteVolume",
             "refresh_period": 1800
         },
@@ -73,7 +73,7 @@
         },
         {
             "method": "VolumePairList",
-            "number_assets": 60,
+            "number_assets": 50,
             "sort_key": "quoteVolume",
             "refresh_period": 1440
         },
