@@ -9,10 +9,6 @@ RUN curl -sL https://deb.nodesource.com/setup_12.x | sudo -E bash -
 RUN apt-get update && apt-get -y upgrade
 RUN apt-get -y install gettext-base nodejs cmake libopenmpi-dev zlib1g-dev libtinfo5
 
-RUN pip install jupyterlab ipywidgets>=7.5 matplotlib
-RUN jupyter labextension install jupyterlab-plotly
-RUN jupyter labextension install @jupyter-widgets/jupyterlab-manager plotlywidget
-
 COPY requirements.txt /freqtrade/requirements.txt
 RUN pip install -r /freqtrade/requirements.txt
 
