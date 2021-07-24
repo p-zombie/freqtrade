@@ -8,6 +8,7 @@ from functools import reduce
 logger = logging.getLogger(__name__)
 
 STRATEGIES = [
+    "AwesomeMacd",
     "CombinedBinHAndCluc",
     "CombinedBinHAndClucV2",
     "CombinedBinHAndClucV5",
@@ -23,6 +24,7 @@ STRATEGIES = [
     "NostalgiaForInfinityV4",
     "NostalgiaForInfinityV5",
     "NostalgiaForInfinityV7",
+    "Obelisk_Ichimoku_ZEMA_v1"
 ]
 
 STRAT_COMBINATIONS = reduce(
@@ -46,8 +48,6 @@ class EnsembleStrategy(IStrategy):
     stoploss = -0.3
 
     buy_params = {
-        "buy_action_diff_threshold": 0,
-        "buy_strategies": 5697,
     }
 
     sell_params = {}
