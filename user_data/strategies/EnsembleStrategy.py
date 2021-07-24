@@ -66,6 +66,20 @@ class EnsembleStrategy(IStrategy):
     trailing_stop_positive_offset = 0.121
     trailing_only_offset_is_reached = False
 
+    protections = [
+        {
+            "method": "CooldownPeriod",
+            "stop_duration_candles": 2
+        },
+        {
+            "method": "StoplossGuard",
+            "lookback_period_candles": 100,
+            "trade_limit": 4,
+            "stop_duration_candles": 10,
+            "only_per_pair": True
+        },
+    ]
+
     def __init__(self, config: dict) -> None:
         super().__init__(config)
         logger.info(f"Buy stratrategies: {STRAT_COMBINATIONS[self.buy_strategies.value]}")
