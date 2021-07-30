@@ -45,7 +45,7 @@ gym: # run rl env
 		python /freqtrade/user_data/freqgym.py
 	osascript -e 'display notification "Done"'
 
-hyperopt: data # run hyper opt
+hyperopt: # run hyper opt
 	docker compose run --rm freqtrade \
 		freqtrade hyperopt --config test.json --hyperopt-loss $(LOSS) --spaces $(SPACES) --strategy $(STRATEGY) -e $(EPOCHS) --timerange=$(TIMERANGE) --timeframe=$(TIMEFRAME) --random-state 42 -j 12
 	osascript -e 'display notification "Done"'
