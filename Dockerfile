@@ -1,5 +1,5 @@
 # syntax = docker/dockerfile:experimental
-FROM freqtradeorg/freqtrade:develop_plot
+FROM freqtradeorg/freqtrade:develop
 
 ENV PYTHONWARNINGS="ignore"
 ENV PIP_CACHE_DIR="/home/ftuser/.cache"
