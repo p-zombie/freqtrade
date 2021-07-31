@@ -1,4 +1,4 @@
-FROM freqtradeorg/freqtrade:develop
+FROM freqtradeorg/freqtrade:stable
 
 ENV PYTHONWARNINGS="ignore"
 ENV PIP_CACHE_DIR="/home/ftuser/.cache"
