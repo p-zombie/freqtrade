@@ -14,17 +14,17 @@
       "trailing_only_offset_is_reached": false
     },
     "buy": {
-      "buy_action_diff_threshold": 0.76,
-      "buy_strategies": 47813
+      "buy_action_diff_threshold": 0.86,
+      "buy_strategies": 4039
     },
     "sell": {
-      "sell_HSL": -0.133,
+      "sell_HSL": -0.199,
       "sell_PF_1": 0.015,
-      "sell_PF_2": 0.069,
-      "sell_SL_1": 0.008,
-      "sell_SL_2": 0.023
+      "sell_PF_2": 0.04,
+      "sell_SL_1": 0.014,
+      "sell_SL_2": 0.058
     }
   },
   "ft_stratparam_v": 1,
-  "export_time": "2021-07-31 01:35:02.110863+00:00"
+  "export_time": "2021-08-14 22:36:58.488761+00:00"
 }
