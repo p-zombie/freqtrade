@@ -2,7 +2,7 @@
     "strategy": "EnsembleStrategy",
     "db_url": "$DRY_DATABASE_URL",
     "dry_run": true,
-    "dry_run_wallet": 1000,
+    "dry_run_wallet": 10000,
     "max_open_trades": 20,
     "timeframe": "5m",
     "stake_currency": "USDT",
