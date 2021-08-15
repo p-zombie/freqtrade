@@ -4,7 +4,7 @@
 -include .env
 export
 
-STRATEGIES = $(shell ls user_data/strategies | grep py | sed "s/.py//g" | grep -v "IndicatorforRL" | grep -v "TrainCatBoostStrategy" | grep -v "Nostalgia" | grep -v "Ensemble" | tr "\n" " ")
+#STRATEGIES = $(shell ls user_data/strategies | grep py | sed "s/.py//g" | grep -v "IndicatorforRL" | grep -v "TrainCatBoostStrategy" | grep -v "Nostalgia" | grep -v "Ensemble" | tr "\n" " ")
 TODAY = $(shell date +'%Y-%m-%d')
 all: help
 
@@ -38,17 +38,14 @@ test: # run backtest
 test-all: data # run backtest on all strats
 	docker compose run --rm freqtrade \
 		freqtrade backtesting --config test.json --strategy-list $(STRATEGIES) --timerange=$(TIMERANGE) --timeframe $(TIMEFRAME) --export=trades
-	osascript -e 'display notification "Done"'
 
 gym: # run rl env
 	docker compose run --rm freqtrade \
 		python /freqtrade/user_data/freqgym.py
-	osascript -e 'display notification "Done"'
 
 hyperopt: # run hyper opt
 	docker compose run --rm freqtrade \
-		freqtrade hyperopt --config test.json --hyperopt-loss $(LOSS) --spaces $(SPACES) --strategy $(STRATEGY) -e $(EPOCHS) --timerange=$(TIMERANGE) --timeframe=$(TIMEFRAME) --random-state 42 -j 12
-	osascript -e 'display notification "Done"'
+		freqtrade hyperopt --config test.json --hyperopt-loss $(LOSS) --spaces $(SPACES) --strategy $(STRATEGY) -e $(EPOCHS) --timerange=$(TIMERANGE) --timeframe=$(TIMEFRAME) --random-state 42 -j -1
 
 stop: # stop containers
 	docker compose stop
