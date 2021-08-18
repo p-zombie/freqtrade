@@ -10,3 +10,4 @@ user_data/backtest_results
 user_data/notebooks/catboost_info
 user_data/tensorboard
 user_data/model.gym
+.venv
