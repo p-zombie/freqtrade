@@ -1,9 +1,9 @@
 {
-    "strategy": "EnsembleStrategy",
+    "strategy": "NostalgiaForInfinityNext",
     "db_url": "$DRY_DATABASE_URL",
     "dry_run": true,
     "dry_run_wallet": 10000,
-    "max_open_trades": 20,
+    "max_open_trades": 5,
     "timeframe": "5m",
     "stake_currency": "USDT",
     "stake_amount": "unlimited",

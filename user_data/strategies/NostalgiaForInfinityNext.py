@@ -1,28 +1,41 @@
+import copy
 import logging
 import pathlib
 import rapidjson
 import freqtrade.vendor.qtpylib.indicators as qtpylib
 import numpy as np
 import talib.abstract as ta
-from freqtrade.misc import json_load
 from freqtrade.strategy.interface import IStrategy
 from freqtrade.strategy import merge_informative_pair, timeframe_to_minutes
-from freqtrade.strategy import DecimalParameter, IntParameter, CategoricalParameter
 from freqtrade.exchange import timeframe_to_prev_date
-from pandas import DataFrame, Series
+from pandas import DataFrame, Series, concat
 from functools import reduce
 import math
+from typing import Dict
 from freqtrade.persistence import Trade
 from datetime import datetime, timedelta
 from technical.util import resample_to_interval, resampled_merge
-from technical.indicators import zema
-import pandas_ta as pta
+from technical.indicators import zema, VIDYA, ichimoku
+import time
 
 log = logging.getLogger(__name__)
 
 
+try:
+    import pandas_ta as pta
+except ImportError:
+    log.error(
+        "IMPORTANT - please install the pandas_ta python module which is needed for this strategy. "
+        "If you're running Docker, add RUN pip install pandas_ta to your Dockerfile, otherwise run: "
+        "pip install pandas_ta"
+    )
+else:
+    log.info("pandas_ta successfully imported")
+
+
 ###########################################################################################################
 ##                NostalgiaForInfinityV8 by iterativ                                                     ##
+##           https://github.com/iterativv/NostalgiaForInfinity                                           ##
 ##                                                                                                       ##
 ##    Strategy for Freqtrade https://github.com/freqtrade/freqtrade                                      ##
 ##                                                                                                       ##
@@ -41,8 +54,10 @@ log = logging.getLogger(__name__)
 ##                                                                                                       ##
 ###########################################################################################################
 ##               HOLD SUPPORT                                                                            ##
+##                                                                                                       ##
+## -------- SPECIFIC TRADES ---------------------------------------------------------------------------- ##
 ##   In case you want to have SOME of the trades to only be sold when on profit, add a file named        ##
-##   "hold-trades.json" in the same directory as this strategy.                                          ##
+##   "nfi-hold-trades.json" in the user_data directory                                                   ##
 ##                                                                                                       ##
 ##   The contents should be similar to:                                                                  ##
 ##                                                                                                       ##
@@ -57,7 +72,18 @@ log = logging.getLogger(__name__)
 ##      output of the telegram status command.                                                           ##
 ##    * Regardless of the defined profit ratio(s), the strategy MUST still produce a SELL signal for the ##
 ##      HOLD support logic to run                                                                        ##
+##    * This feature can be completely disabled with the holdSupportEnabled class attribute              ##
 ##                                                                                                       ##
+## -------- SPECIFIC PAIRS ----------------------------------------------------------------------------- ##
+##   In case you want to have some pairs to always be on held until a specific profit, using the same    ##
+##   "hold-trades.json" file add something like:                                                         ##
+##                                                                                                       ##
+##   {"trade_pairs": {"BTC/USDT": 0.001, "ETH/USDT": -0.005}}                                            ##
+##                                                                                                       ##
+## -------- SPECIFIC TRADES AND PAIRS ------------------------------------------------------------------ ##
+##   It is also valid to include specific trades and pairs on the holds file, for example:               ##
+##                                                                                                       ##
+##   {"trade_ids": {"1": 0.001}, "trade_pairs": {"BTC/USDT": 0.001}}                                     ##
 ###########################################################################################################
 ##               DONATIONS                                                                               ##
 ##                                                                                                       ##
@@ -67,13 +93,17 @@ log = logging.getLogger(__name__)
 ##   ETH (ERC20): 0x83D3cFb8001BDC5d2211cBeBB8cB3461E5f7Ec91                                             ##
 ##   BEP20/BSC (ETH, BNB, ...): 0x86A0B21a20b39d16424B7c8003E4A7e12d78ABEe                               ##
 ##                                                                                                       ##
+##               REFERRAL LINKS                                                                          ##
+##                                                                                                       ##
+##  Binance: https://accounts.binance.com/en/register?ref=37365811                                       ##
+##  Kucoin: https://www.kucoin.com/ucenter/signup?rcode=rJTLZ9K                                          ##
 ###########################################################################################################
 
 
 class NostalgiaForInfinityNext(IStrategy):
     INTERFACE_VERSION = 2
 
-    # # ROI table:
+    # ROI table:
     minimal_roi = {
         "0": 10,
     }
@@ -93,8 +123,22 @@ class NostalgiaForInfinityNext(IStrategy):
     res_timeframe = 'none'
     info_timeframe = '1h'
 
+    # BTC informative
     has_BTC_base_tf = False
     has_BTC_info_tf = True
+
+    # Backtest Age Filter emulation
+    has_bt_agefilter = False
+    bt_min_age_days = 3
+
+    # Exchange Downtime protection
+    has_downtime_protection = False
+
+    # Report populate_indicators loop time per pair
+    has_loop_perf_logging = False
+
+    # Do you want to use the hold feature? (with hold-trades.json)
+    holdSupportEnabled = True
 
     # Run "populate_indicators()" only for new candle.
     process_only_new_candles = True
@@ -155,6 +199,16 @@ class NostalgiaForInfinityNext(IStrategy):
         "buy_condition_32_enable": True,
         "buy_condition_33_enable": True,
         "buy_condition_34_enable": True,
+        "buy_condition_35_enable": True,
+        "buy_condition_36_enable": True,
+        "buy_condition_37_enable": True,
+        "buy_condition_38_enable": True,
+        "buy_condition_39_enable": True,
+        "buy_condition_40_enable": True,
+        "buy_condition_41_enable": True,
+        "buy_condition_42_enable": True,
+        "buy_condition_43_enable": True,
+        "buy_condition_44_enable": True,
         #############
     }
 
@@ -172,2132 +226,1884 @@ class NostalgiaForInfinityNext(IStrategy):
         #############
     }
 
+    profit_target_params = {
+        #############
+        # Enable/Disable conditions
+        "profit_target_1_enable": False,
+        #############
+    }
+
     #############################################################
 
     buy_protection_params = {
         1: {
-            "enable"                    : CategoricalParameter([True, False], default=True, space='buy', optimize=False, load=True),
-            "ema_fast"                  : CategoricalParameter([True, False], default=False, space='buy', optimize=False, load=True),
-            "ema_fast_len"              : CategoricalParameter(["26","50","100","200"], default="26", space='buy', optimize=False, load=True),
-            "ema_slow"                  : CategoricalParameter([True, False], default=True, space='buy', optimize=False, load=True),
-            "ema_slow_len"              : CategoricalParameter(["26","50","100","200"], default="100", space='buy', optimize=False, load=True),
-            "close_above_ema_fast"      : CategoricalParameter([True, False], default=False, space='buy', optimize=False, load=True),
-            "close_above_ema_fast_len"  : CategoricalParameter(["12","20","26","50","100","200"], default="200", space='buy', optimize=False, load=True),
-            "close_above_ema_slow"      : CategoricalParameter([True, False], default=False, space='buy', optimize=False, load=True),
-            "close_above_ema_slow_len"  : CategoricalParameter(["15","50","200"], default="200", space='buy', optimize=False, load=True),
-            "sma200_rising"             : CategoricalParameter([True, False], default=True, space='buy', optimize=False, load=True),
-            "sma200_rising_val"         : CategoricalParameter(["20","30","36","44","50"], default="28", space='buy', optimize=False, load=True),
-            "sma200_1h_rising"          : CategoricalParameter([True, False], default=False, space='buy', optimize=False, load=True),
-            "sma200_1h_rising_val"      : CategoricalParameter(["20","30","36","44","50"], default="50", space='buy', optimize=False, load=True),
-            "safe_dips"                 : CategoricalParameter([True, False], default=True, space='buy', optimize=False, load=True),
-            "safe_dips_type"            : CategoricalParameter(["10","50","100"], default="80", space='buy', optimize=False, load=True),
-            "safe_pump"                 : CategoricalParameter([True, False], default=True, space='buy', optimize=False, load=True),
-            "safe_pump_type"            : CategoricalParameter(["10","50","100"], default="70", space='buy', optimize=False, load=True),
-            "safe_pump_period"          : CategoricalParameter(["24","36","48"], default="24", space='buy', optimize=False, load=True),
-            "btc_1h_not_downtrend"      : CategoricalParameter([True, False], default=False, space='buy', optimize=False, load=True)
+            "ema_fast"                  : False,
+            "ema_fast_len"              : "26",
+            "ema_slow"                  : True,
+            "ema_slow_len"              : "100",
+            "close_above_ema_fast"      : False,
+            "close_above_ema_fast_len"  : "200",
+            "close_above_ema_slow"      : False,
+            "close_above_ema_slow_len"  : "200",
+            "sma200_rising"             : True,
+            "sma200_rising_val"         : "28",
+            "sma200_1h_rising"          : False,
+            "sma200_1h_rising_val"      : "50",
+            "safe_dips"                 : False,
+            "safe_dips_type"            : "80",
+            "safe_pump"                 : False,
+            "safe_pump_type"            : "70",
+            "safe_pump_period"          : "24",
+            "btc_1h_not_downtrend"      : False
         },
         2: {
-            "enable"                    : CategoricalParameter([True, False], default=True, space='buy', optimize=False, load=True),
-            "ema_fast"                  : CategoricalParameter([True, False], default=False, space='buy', optimize=False, load=True),
-            "ema_fast_len"              : CategoricalParameter(["26","50","100","200"], default="50", space='buy', optimize=False, load=True),
-            "ema_slow"                  : CategoricalParameter([True, False], default=True, space='buy', optimize=False, load=True),
-            "ema_slow_len"              : CategoricalParameter(["26","50","100","200"], default="20", space='buy', optimize=False, load=True),
-            "close_above_ema_fast"      : CategoricalParameter([True, False], default=False, space='buy', optimize=False, load=True),
-            "close_above_ema_fast_len"  : CategoricalParameter(["12","20","26","50","100","200"], default="200", space='buy', optimize=False, load=True),
-            "close_above_ema_slow"      : CategoricalParameter([True, False], default=False, space='buy', optimize=False, load=True),
-            "close_above_ema_slow_len"  : CategoricalParameter(["15","50","200"], default="200", space='buy', optimize=False, load=True),
-            "sma200_rising"             : CategoricalParameter([True, False], default=False, space='buy', optimize=False, load=True),
-            "sma200_rising_val"         : CategoricalParameter(["20","30","36","44","50"], default="50", space='buy', optimize=False, load=True),
-            "sma200_1h_rising"          : CategoricalParameter([True, False], default=False, space='buy', optimize=False, load=True),
-            "sma200_1h_rising_val"      : CategoricalParameter(["20","30","36","44","50"], default="50", space='buy', optimize=False, load=True),
-            "safe_dips"                 : CategoricalParameter([True, False], default=True, space='buy', optimize=False, load=True),
-            "safe_dips_type"            : CategoricalParameter(["10","50","100"], default="50", space='buy', optimize=False, load=True),
-            "safe_pump"                 : CategoricalParameter([True, False], default=False, space='buy', optimize=False, load=True),
-            "safe_pump_type"            : CategoricalParameter(["10","50","100"], default="50", space='buy', optimize=False, load=True),
-            "safe_pump_period"          : CategoricalParameter(["24","36","48"], default="24", space='buy', optimize=False, load=True),
-            "btc_1h_not_downtrend"      : CategoricalParameter([True, False], default=False, space='buy', optimize=False, load=True)
+            "ema_fast"                  : False,
+            "ema_fast_len"              : "50",
+            "ema_slow"                  : True,
+            "ema_slow_len"              : "20",
+            "close_above_ema_fast"      : False,
+            "close_above_ema_fast_len"  : "200",
+            "close_above_ema_slow"      : False,
+            "close_above_ema_slow_len"  : "200",
+            "sma200_rising"             : False,
+            "sma200_rising_val"         : "50",
+            "sma200_1h_rising"          : False,
+            "sma200_1h_rising_val"      : "50",
+            "safe_dips"                 : True,
+            "safe_dips_type"            : "50",
+            "safe_pump"                 : False,
+            "safe_pump_type"            : "50",
+            "safe_pump_period"          : "24",
+            "btc_1h_not_downtrend"      : False
         },
         3: {
-            "enable"                    : CategoricalParameter([True, False], default=True, space='buy', optimize=False, load=True),
-            "ema_fast"                  : CategoricalParameter([True, False], default=True, space='buy', optimize=False, load=True),
-            "ema_fast_len"              : CategoricalParameter(["26","50","100","200"], default="100", space='buy', optimize=False, load=True),
-            "ema_slow"                  : CategoricalParameter([True, False], default=True, space='buy', optimize=False, load=True),
-            "ema_slow_len"              : CategoricalParameter(["26","50","100","200"], default="100", space='buy', optimize=False, load=True),
-            "close_above_ema_fast"      : CategoricalParameter([True, False], default=False, space='buy', optimize=False, load=True),
-            "close_above_ema_fast_len"  : CategoricalParameter(["12","20","26","50","100","200"], default="200", space='buy', optimize=False, load=True),
-            "close_above_ema_slow"      : CategoricalParameter([True, False], default=False, space='buy', optimize=False, load=True),
-            "close_above_ema_slow_len"  : CategoricalParameter(["15","50","200"], default="200", space='buy', optimize=False, load=True),
-            "sma200_rising"             : CategoricalParameter([True, False], default=False, space='buy', optimize=False, load=True),
-            "sma200_rising_val"         : CategoricalParameter(["20","30","36","44","50"], default="50", space='buy', optimize=False, load=True),
-            "sma200_1h_rising"          : CategoricalParameter([True, False], default=False, space='buy', optimize=False, load=True),
-            "sma200_1h_rising_val"      : CategoricalParameter(["20","30","36","44","50"], default="50", space='buy', optimize=False, load=True),
-            "safe_dips"                 : CategoricalParameter([True, False], default=True, space='buy', optimize=False, load=True),
-            "safe_dips_type"            : CategoricalParameter(["10","50","100"], default="80", space='buy', optimize=False, load=True),
-            "safe_pump"                 : CategoricalParameter([True, False], default=True, space='buy', optimize=False, load=True),
-            "safe_pump_type"            : CategoricalParameter(["10","50","100"], default="100", space='buy', optimize=False, load=True),
-            "safe_pump_period"          : CategoricalParameter(["24","36","48"], default="36", space='buy', optimize=False, load=True),
-            "btc_1h_not_downtrend"      : CategoricalParameter([True, False], default=False, space='buy', optimize=False, load=True)
+            "ema_fast"                  : True,
+            "ema_fast_len"              : "100",
+            "ema_slow"                  : True,
+            "ema_slow_len"              : "100",
+            "close_above_ema_fast"      : False,
+            "close_above_ema_fast_len"  : "200",
+            "close_above_ema_slow"      : False,
+            "close_above_ema_slow_len"  : "200",
+            "sma200_rising"             : False,
+            "sma200_rising_val"         : "50",
+            "sma200_1h_rising"          : False,
+            "sma200_1h_rising_val"      : "50",
+            "safe_dips"                 : True,
+            "safe_dips_type"            : "70",
+            "safe_pump"                 : True,
+            "safe_pump_type"            : "100",
+            "safe_pump_period"          : "36",
+            "btc_1h_not_downtrend"      : False
         },
         4: {
-            "enable"                    : CategoricalParameter([True, False], default=True, space='buy', optimize=False, load=True),
-            "ema_fast"                  : CategoricalParameter([True, False], default=True, space='buy', optimize=False, load=True),
-            "ema_fast_len"              : CategoricalParameter(["26","50","100","200"], default="50", space='buy', optimize=False, load=True),
-            "ema_slow"                  : CategoricalParameter([True, False], default=True, space='buy', optimize=False, load=True),
-            "ema_slow_len"              : CategoricalParameter(["26","50","100","200"], default="50", space='buy', optimize=False, load=True),
-            "close_above_ema_fast"      : CategoricalParameter([True, False], default=False, space='buy', optimize=False, load=True),
-            "close_above_ema_fast_len"  : CategoricalParameter(["12","20","26","50","100","200"], default="200", space='buy', optimize=False, load=True),
-            "close_above_ema_slow"      : CategoricalParameter([True, False], default=False, space='buy', optimize=False, load=True),
-            "close_above_ema_slow_len"  : CategoricalParameter(["15","50","200"], default="200", space='buy', optimize=False, load=True),
-            "sma200_rising"             : CategoricalParameter([True, False], default=False, space='buy', optimize=False, load=True),
-            "sma200_rising_val"         : CategoricalParameter(["20","30","36","44","50"], default="50", space='buy', optimize=False, load=True),
-            "sma200_1h_rising"          : CategoricalParameter([True, False], default=False, space='buy', optimize=False, load=True),
-            "sma200_1h_rising_val"      : CategoricalParameter(["20","30","36","44","50"], default="20", space='buy', optimize=False, load=True),
-            "safe_dips"                 : CategoricalParameter([True, False], default=True, space='buy', optimize=False, load=True),
-            "safe_dips_type"            : CategoricalParameter(["10","50","100"], default="50", space='buy', optimize=False, load=True),
-            "safe_pump"                 : CategoricalParameter([True, False], default=False, space='buy', optimize=False, load=True),
-            "safe_pump_type"            : CategoricalParameter(["10","50","100"], default="110", space='buy', optimize=False, load=True),
-            "safe_pump_period"          : CategoricalParameter(["24","36","48"], default="48", space='buy', optimize=False, load=True),
-            "btc_1h_not_downtrend"      : CategoricalParameter([True, False], default=False, space='buy', optimize=False, load=True)
+            "ema_fast"                  : True,
+            "ema_fast_len"              : "50",
+            "ema_slow"                  : True,
+            "ema_slow_len"              : "50",
+            "close_above_ema_fast"      : False,
+            "close_above_ema_fast_len"  : "200",
+            "close_above_ema_slow"      : False,
+            "close_above_ema_slow_len"  : "200",
+            "sma200_rising"             : False,
+            "sma200_rising_val"         : "50",
+            "sma200_1h_rising"          : False,
+            "sma200_1h_rising_val"      : "20",
+            "safe_dips"                 : True,
+            "safe_dips_type"            : "50",
+            "safe_pump"                 : False,
+            "safe_pump_type"            : "110",
+            "safe_pump_period"          : "48",
+            "btc_1h_not_downtrend"      : False
         },
         5: {
-            "enable"                    : CategoricalParameter([True, False], default=True, space='buy', optimize=False, load=True),
-            "ema_fast"                  : CategoricalParameter([True, False], default=True, space='buy', optimize=False, load=True),
-            "ema_fast_len"              : CategoricalParameter(["26","50","100","200"], default="100", space='buy', optimize=False, load=True),
-            "ema_slow"                  : CategoricalParameter([True, False], default=False, space='buy', optimize=False, load=True),
-            "ema_slow_len"              : CategoricalParameter(["26","50","100","200"], default="50", space='buy', optimize=False, load=True),
-            "close_above_ema_fast"      : CategoricalParameter([True, False], default=False, space='buy', optimize=False, load=True),
-            "close_above_ema_fast_len"  : CategoricalParameter(["12","20","26","50","100","200"], default="100", space='buy', optimize=False, load=True),
-            "close_above_ema_slow"      : CategoricalParameter([True, False], default=False, space='buy', optimize=False, load=True),
-            "close_above_ema_slow_len"  : CategoricalParameter(["50","100","200"], default="200", space='buy', optimize=False, load=True),
-            "sma200_rising"             : CategoricalParameter([True, False], default=False, space='buy', optimize=False, load=True),
-            "sma200_rising_val"         : CategoricalParameter(["20","30","36","44","50"], default="50", space='buy', optimize=False, load=True),
-            "sma200_1h_rising"          : CategoricalParameter([True, False], default=False, space='buy', optimize=False, load=True),
-            "sma200_1h_rising_val"      : CategoricalParameter(["20","30","36","44","50"], default="50", space='buy', optimize=False, load=True),
-            "safe_dips"                 : CategoricalParameter([True, False], default=True, space='buy', optimize=False, load=True),
-            "safe_dips_type"            : CategoricalParameter(["10","50","100"], default="130", space='buy', optimize=False, load=True),
-            "safe_pump"                 : CategoricalParameter([True, False], default=True, space='buy', optimize=False, load=True),
-            "safe_pump_type"            : CategoricalParameter(["10","50","100"], default="30", space='buy', optimize=False, load=True),
-            "safe_pump_period"          : CategoricalParameter(["24","36","48"], default="36", space='buy', optimize=False, load=True),
-            "btc_1h_not_downtrend"      : CategoricalParameter([True, False], default=False, space='buy', optimize=False, load=True)
+            "ema_fast"                  : True,
+            "ema_fast_len"              : "100",
+            "ema_slow"                  : False,
+            "ema_slow_len"              : "50",
+            "close_above_ema_fast"      : False,
+            "close_above_ema_fast_len"  : "100",
+            "close_above_ema_slow"      : False,
+            "close_above_ema_slow_len"  : "200",
+            "sma200_rising"             : False,
+            "sma200_rising_val"         : "50",
+            "sma200_1h_rising"          : False,
+            "sma200_1h_rising_val"      : "50",
+            "safe_dips"                 : True,
+            "safe_dips_type"            : "100",
+            "safe_pump"                 : True,
+            "safe_pump_type"            : "30",
+            "safe_pump_period"          : "36",
+            "btc_1h_not_downtrend"      : False
         },
         6: {
-            "enable"                    : CategoricalParameter([True, False], default=True, space='buy', optimize=False, load=True),
-            "ema_fast"                  : CategoricalParameter([True, False], default=False, space='buy', optimize=False, load=True),
-            "ema_fast_len"              : CategoricalParameter(["26","50","100","200"], default="50", space='buy', optimize=False, load=True),
-            "ema_slow"                  : CategoricalParameter([True, False], default=True, space='buy', optimize=False, load=True),
-            "ema_slow_len"              : CategoricalParameter(["26","50","100","200"], default="100", space='buy', optimize=False, load=True),
-            "close_above_ema_fast"      : CategoricalParameter([True, False], default=False, space='buy', optimize=False, load=True),
-            "close_above_ema_fast_len"  : CategoricalParameter(["12","20","26","50","100","200"], default="200", space='buy', optimize=False, load=True),
-            "close_above_ema_slow"      : CategoricalParameter([True, False], default=False, space='buy', optimize=False, load=True),
-            "close_above_ema_slow_len"  : CategoricalParameter(["15","50","200"], default="200", space='buy', optimize=False, load=True),
-            "sma200_rising"             : CategoricalParameter([True, False], default=False, space='buy', optimize=False, load=True),
-            "sma200_rising_val"         : CategoricalParameter(["20","30","36","44","50"], default="50", space='buy', optimize=False, load=True),
-            "sma200_1h_rising"          : CategoricalParameter([True, False], default=False, space='buy', optimize=False, load=True),
-            "sma200_1h_rising_val"      : CategoricalParameter(["20","30","36","44","50"], default="50", space='buy', optimize=False, load=True),
-            "safe_dips"                 : CategoricalParameter([True, False], default=True, space='buy', optimize=False, load=True),
-            "safe_dips_type"            : CategoricalParameter(["10","50","100"], default="50", space='buy', optimize=False, load=True),
-            "safe_pump"                 : CategoricalParameter([True, False], default=True, space='buy', optimize=False, load=True),
-            "safe_pump_type"            : CategoricalParameter(["10","50","100"], default="20", space='buy', optimize=False, load=True),
-            "safe_pump_period"          : CategoricalParameter(["24","36","48"], default="36", space='buy', optimize=False, load=True),
-            "btc_1h_not_downtrend"      : CategoricalParameter([True, False], default=False, space='buy', optimize=False, load=True)
+            "ema_fast"                  : False,
+            "ema_fast_len"              : "50",
+            "ema_slow"                  : True,
+            "ema_slow_len"              : "100",
+            "close_above_ema_fast"      : False,
+            "close_above_ema_fast_len"  : "200",
+            "close_above_ema_slow"      : False,
+            "close_above_ema_slow_len"  : "200",
+            "sma200_rising"             : False,
+            "sma200_rising_val"         : "50",
+            "sma200_1h_rising"          : False,
+            "sma200_1h_rising_val"      : "50",
+            "safe_dips"                 : True,
+            "safe_dips_type"            : "50",
+            "safe_pump"                 : True,
+            "safe_pump_type"            : "20",
+            "safe_pump_period"          : "36",
+            "btc_1h_not_downtrend"      : False
         },
         7: {
-            "enable"                    : CategoricalParameter([True, False], default=True, space='buy', optimize=False, load=True),
-            "ema_fast"                  : CategoricalParameter([True, False], default=True, space='buy', optimize=False, load=True),
-            "ema_fast_len"              : CategoricalParameter(["26","50","100","200"], default="100", space='buy', optimize=False, load=True),
-            "ema_slow"                  : CategoricalParameter([True, False], default=True, space='buy', optimize=False, load=True),
-            "ema_slow_len"              : CategoricalParameter(["26","50","100","200"], default="12", space='buy', optimize=False, load=True),
-            "close_above_ema_fast"      : CategoricalParameter([True, False], default=False, space='buy', optimize=False, load=True),
-            "close_above_ema_fast_len"  : CategoricalParameter(["12","20","26","50","100","200"], default="200", space='buy', optimize=False, load=True),
-            "close_above_ema_slow"      : CategoricalParameter([True, False], default=False, space='buy', optimize=False, load=True),
-            "close_above_ema_slow_len"  : CategoricalParameter(["15","50","200"], default="200", space='buy', optimize=False, load=True),
-            "sma200_rising"             : CategoricalParameter([True, False], default=False, space='buy', optimize=False, load=True),
-            "sma200_rising_val"         : CategoricalParameter(["20","30","36","44","50"], default="50", space='buy', optimize=False, load=True),
-            "sma200_1h_rising"          : CategoricalParameter([True, False], default=False, space='buy', optimize=False, load=True),
-            "sma200_1h_rising_val"      : CategoricalParameter(["20","30","36","44","50"], default="50", space='buy', optimize=False, load=True),
-            "safe_dips"                 : CategoricalParameter([True, False], default=False, space='buy', optimize=False, load=True),
-            "safe_dips_type"            : CategoricalParameter(["10","50","100"], default="50", space='buy', optimize=False, load=True),
-            "safe_pump"                 : CategoricalParameter([True, False], default=False, space='buy', optimize=False, load=True),
-            "safe_pump_type"            : CategoricalParameter(["10","50","100"], default="50", space='buy', optimize=False, load=True),
-            "safe_pump_period"          : CategoricalParameter(["24","36","48"], default="24", space='buy', optimize=False, load=True),
-            "btc_1h_not_downtrend"      : CategoricalParameter([True, False], default=False, space='buy', optimize=False, load=True)
+            "ema_fast"                  : True,
+            "ema_fast_len"              : "100",
+            "ema_slow"                  : True,
+            "ema_slow_len"              : "12",
+            "close_above_ema_fast"      : False,
+            "close_above_ema_fast_len"  : "200",
+            "close_above_ema_slow"      : False,
+            "close_above_ema_slow_len"  : "200",
+            "sma200_rising"             : False,
+            "sma200_rising_val"         : "50",
+            "sma200_1h_rising"          : False,
+            "sma200_1h_rising_val"      : "50",
+            "safe_dips"                 : True,
+            "safe_dips_type"            : "130",
+            "safe_pump"                 : True,
+            "safe_pump_type"            : "120",
+            "safe_pump_period"          : "24",
+            "btc_1h_not_downtrend"      : False
         },
         8: {
-            "enable"                    : CategoricalParameter([True, False], default=True, space='buy', optimize=False, load=True),
-            "ema_fast"                  : CategoricalParameter([True, False], default=False, space='buy', optimize=False, load=True),
-            "ema_fast_len"              : CategoricalParameter(["26","50","100","200"], default="50", space='buy', optimize=False, load=True),
-            "ema_slow"                  : CategoricalParameter([True, False], default=True, space='buy', optimize=False, load=True),
-            "ema_slow_len"              : CategoricalParameter(["26","50","100","200"], default="12", space='buy', optimize=False, load=True),
-            "close_above_ema_fast"      : CategoricalParameter([True, False], default=True, space='buy', optimize=False, load=True),
-            "close_above_ema_fast_len"  : CategoricalParameter(["12","20","26","50","100","200"], default="200", space='buy', optimize=False, load=True),
-            "close_above_ema_slow"      : CategoricalParameter([True, False], default=False, space='buy', optimize=False, load=True),
-            "close_above_ema_slow_len"  : CategoricalParameter(["15","50","200"], default="200", space='buy', optimize=False, load=True),
-            "sma200_rising"             : CategoricalParameter([True, False], default=False, space='buy', optimize=False, load=True),
-            "sma200_rising_val"         : CategoricalParameter(["20","30","36","44","50"], default="50", space='buy', optimize=False, load=True),
-            "sma200_1h_rising"          : CategoricalParameter([True, False], default=False, space='buy', optimize=False, load=True),
-            "sma200_1h_rising_val"      : CategoricalParameter(["20","30","36","44","50"], default="50", space='buy', optimize=False, load=True),
-            "safe_dips"                 : CategoricalParameter([True, False], default=True, space='buy', optimize=False, load=True),
-            "safe_dips_type"            : CategoricalParameter(["10","50","100"], default="100", space='buy', optimize=False, load=True),
-            "safe_pump"                 : CategoricalParameter([True, False], default=True, space='buy', optimize=False, load=True),
-            "safe_pump_type"            : CategoricalParameter(["10","50","100"], default="120", space='buy', optimize=False, load=True),
-            "safe_pump_period"          : CategoricalParameter(["24","36","48"], default="24", space='buy', optimize=False, load=True),
-            "btc_1h_not_downtrend"      : CategoricalParameter([True, False], default=False, space='buy', optimize=False, load=True)
+            "ema_fast"                  : False,
+            "ema_fast_len"              : "50",
+            "ema_slow"                  : True,
+            "ema_slow_len"              : "12",
+            "close_above_ema_fast"      : True,
+            "close_above_ema_fast_len"  : "200",
+            "close_above_ema_slow"      : False,
+            "close_above_ema_slow_len"  : "200",
+            "sma200_rising"             : False,
+            "sma200_rising_val"         : "50",
+            "sma200_1h_rising"          : False,
+            "sma200_1h_rising_val"      : "50",
+            "safe_dips"                 : True,
+            "safe_dips_type"            : "100",
+            "safe_pump"                 : True,
+            "safe_pump_type"            : "120",
+            "safe_pump_period"          : "24",
+            "btc_1h_not_downtrend"      : False
         },
         9: {
-            "enable"                    : CategoricalParameter([True, False], default=True, space='buy', optimize=False, load=True),
-            "ema_fast"                  : CategoricalParameter([True, False], default=True, space='buy', optimize=False, load=True),
-            "ema_fast_len"              : CategoricalParameter(["26","50","100","200"], default="100", space='buy', optimize=False, load=True),
-            "ema_slow"                  : CategoricalParameter([True, False], default=False, space='buy', optimize=False, load=True),
-            "ema_slow_len"              : CategoricalParameter(["26","50","100","200"], default="50", space='buy', optimize=False, load=True),
-            "close_above_ema_fast"      : CategoricalParameter([True, False], default=False, space='buy', optimize=False, load=True),
-            "close_above_ema_fast_len"  : CategoricalParameter(["12","20","26","50","100","200"], default="200", space='buy', optimize=False, load=True),
-            "close_above_ema_slow"      : CategoricalParameter([True, False], default=False, space='buy', optimize=False, load=True),
-            "close_above_ema_slow_len"  : CategoricalParameter(["15","50","200"], default="200", space='buy', optimize=False, load=True),
-            "sma200_rising"             : CategoricalParameter([True, False], default=False, space='buy', optimize=False, load=True),
-            "sma200_rising_val"         : CategoricalParameter(["20","30","36","44","50"], default="50", space='buy', optimize=False, load=True),
-            "sma200_1h_rising"          : CategoricalParameter([True, False], default=False, space='buy', optimize=False, load=True),
-            "sma200_1h_rising_val"      : CategoricalParameter(["20","30","36","44","50"], default="50", space='buy', optimize=False, load=True),
-            "safe_dips"                 : CategoricalParameter([True, False], default=False, space='buy', optimize=False, load=True),
-            "safe_dips_type"            : CategoricalParameter(["10","50","100"], default="10", space='buy', optimize=False, load=True),
-            "safe_pump"                 : CategoricalParameter([True, False], default=False, space='buy', optimize=False, load=True),
-            "safe_pump_type"            : CategoricalParameter(["10","50","100"], default="50", space='buy', optimize=False, load=True),
-            "safe_pump_period"          : CategoricalParameter(["24","36","48"], default="24", space='buy', optimize=False, load=True),
-            "btc_1h_not_downtrend"      : CategoricalParameter([True, False], default=False, space='buy', optimize=False, load=True)
+            "ema_fast"                  : True,
+            "ema_fast_len"              : "100",
+            "ema_slow"                  : False,
+            "ema_slow_len"              : "50",
+            "close_above_ema_fast"      : False,
+            "close_above_ema_fast_len"  : "200",
+            "close_above_ema_slow"      : False,
+            "close_above_ema_slow_len"  : "200",
+            "sma200_rising"             : False,
+            "sma200_rising_val"         : "50",
+            "sma200_1h_rising"          : False,
+            "sma200_1h_rising_val"      : "50",
+            "safe_dips"                 : False,
+            "safe_dips_type"            : "10",
+            "safe_pump"                 : False,
+            "safe_pump_type"            : "50",
+            "safe_pump_period"          : "24",
+            "btc_1h_not_downtrend"      : False
         },
         10: {
-            "enable"                    : CategoricalParameter([True, False], default=True, space='buy', optimize=False, load=True),
-            "ema_fast"                  : CategoricalParameter([True, False], default=False, space='buy', optimize=False, load=True),
-            "ema_fast_len"              : CategoricalParameter(["26","50","100","200"], default="50", space='buy', optimize=False, load=True),
-            "ema_slow"                  : CategoricalParameter([True, False], default=True, space='buy', optimize=False, load=True),
-            "ema_slow_len"              : CategoricalParameter(["26","50","100","200"], default="50", space='buy', optimize=False, load=True),
-            "close_above_ema_fast"      : CategoricalParameter([True, False], default=False, space='buy', optimize=False, load=True),
-            "close_above_ema_fast_len"  : CategoricalParameter(["12","20","26","50","100","200"], default="200", space='buy', optimize=False, load=True),
-            "close_above_ema_slow"      : CategoricalParameter([True, False], default=False, space='buy', optimize=False, load=True),
-            "close_above_ema_slow_len"  : CategoricalParameter(["15","50","200"], default="200", space='buy', optimize=False, load=True),
-            "sma200_rising"             : CategoricalParameter([True, False], default=False, space='buy', optimize=False, load=True),
-            "sma200_rising_val"         : CategoricalParameter(["20","30","36","44","50"], default="50", space='buy', optimize=False, load=True),
-            "sma200_1h_rising"          : CategoricalParameter([True, False], default=False, space='buy', optimize=False, load=True),
-            "sma200_1h_rising_val"      : CategoricalParameter(["20","30","36","44","50"], default="24", space='buy', optimize=False, load=True),
-            "safe_dips"                 : CategoricalParameter([True, False], default=True, space='buy', optimize=False, load=True),
-            "safe_dips_type"            : CategoricalParameter(["10","50","100"], default="100", space='buy', optimize=False, load=True),
-            "safe_pump"                 : CategoricalParameter([True, False], default=False, space='buy', optimize=False, load=True),
-            "safe_pump_type"            : CategoricalParameter(["10","50","100"], default="50", space='buy', optimize=False, load=True),
-            "safe_pump_period"          : CategoricalParameter(["24","36","48"], default="24", space='buy', optimize=False, load=True),
-            "btc_1h_not_downtrend"      : CategoricalParameter([True, False], default=False, space='buy', optimize=False, load=True)
+            "ema_fast"                  : False,
+            "ema_fast_len"              : "50",
+            "ema_slow"                  : True,
+            "ema_slow_len"              : "50",
+            "close_above_ema_fast"      : False,
+            "close_above_ema_fast_len"  : "200",
+            "close_above_ema_slow"      : False,
+            "close_above_ema_slow_len"  : "200",
+            "sma200_rising"             : False,
+            "sma200_rising_val"         : "50",
+            "sma200_1h_rising"          : False,
+            "sma200_1h_rising_val"      : "24",
+            "safe_dips"                 : True,
+            "safe_dips_type"            : "120",
+            "safe_pump"                 : False,
+            "safe_pump_type"            : "50",
+            "safe_pump_period"          : "24",
+            "btc_1h_not_downtrend"      : False
         },
         11: {
-            "enable"                    : CategoricalParameter([True, False], default=True, space='buy', optimize=False, load=True),
-            "ema_fast"                  : CategoricalParameter([True, False], default=False, space='buy', optimize=False, load=True),
-            "ema_fast_len"              : CategoricalParameter(["26","50","100","200"], default="50", space='buy', optimize=False, load=True),
-            "ema_slow"                  : CategoricalParameter([True, False], default=False, space='buy', optimize=False, load=True),
-            "ema_slow_len"              : CategoricalParameter(["26","50","100","200"], default="50", space='buy', optimize=False, load=True),
-            "close_above_ema_fast"      : CategoricalParameter([True, False], default=False, space='buy', optimize=False, load=True),
-            "close_above_ema_fast_len"  : CategoricalParameter(["12","20","26","50","100","200"], default="200", space='buy', optimize=False, load=True),
-            "close_above_ema_slow"      : CategoricalParameter([True, False], default=False, space='buy', optimize=False, load=True),
-            "close_above_ema_slow_len"  : CategoricalParameter(["15","50","200"], default="200", space='buy', optimize=False, load=True),
-            "sma200_rising"             : CategoricalParameter([True, False], default=False, space='buy', optimize=False, load=True),
-            "sma200_rising_val"         : CategoricalParameter(["20","30","36","44","50"], default="50", space='buy', optimize=False, load=True),
-            "sma200_1h_rising"          : CategoricalParameter([True, False], default=False, space='buy', optimize=False, load=True),
-            "sma200_1h_rising_val"      : CategoricalParameter(["20","30","36","44","50"], default="50", space='buy', optimize=False, load=True),
-            "safe_dips"                 : CategoricalParameter([True, False], default=False, space='buy', optimize=False, load=True),
-            "safe_dips_type"            : CategoricalParameter(["10","50","100"], default="100", space='buy', optimize=False, load=True),
-            "safe_pump"                 : CategoricalParameter([True, False], default=True, space='buy', optimize=False, load=True),
-            "safe_pump_type"            : CategoricalParameter(["10","50","100"], default="50", space='buy', optimize=False, load=True),
-            "safe_pump_period"          : CategoricalParameter(["24","36","48"], default="24", space='buy', optimize=False, load=True),
-            "btc_1h_not_downtrend"      : CategoricalParameter([True, False], default=False, space='buy', optimize=False, load=True)
+            "ema_fast"                  : False,
+            "ema_fast_len"              : "50",
+            "ema_slow"                  : False,
+            "ema_slow_len"              : "50",
+            "close_above_ema_fast"      : False,
+            "close_above_ema_fast_len"  : "200",
+            "close_above_ema_slow"      : False,
+            "close_above_ema_slow_len"  : "200",
+            "sma200_rising"             : False,
+            "sma200_rising_val"         : "50",
+            "sma200_1h_rising"          : False,
+            "sma200_1h_rising_val"      : "50",
+            "safe_dips"                 : False,
+            "safe_dips_type"            : "100",
+            "safe_pump"                 : True,
+            "safe_pump_type"            : "50",
+            "safe_pump_period"          : "24",
+            "btc_1h_not_downtrend"      : False
         },
         12: {
-            "enable"                    : CategoricalParameter([True, False], default=True, space='buy', optimize=False, load=True),
-            "ema_fast"                  : CategoricalParameter([True, False], default=False, space='buy', optimize=False, load=True),
-            "ema_fast_len"              : CategoricalParameter(["26","50","100","200"], default="50", space='buy', optimize=False, load=True),
-            "ema_slow"                  : CategoricalParameter([True, False], default=False, space='buy', optimize=False, load=True),
-            "ema_slow_len"              : CategoricalParameter(["26","50","100","200"], default="50", space='buy', optimize=False, load=True),
-            "close_above_ema_fast"      : CategoricalParameter([True, False], default=False, space='buy', optimize=False, load=True),
-            "close_above_ema_fast_len"  : CategoricalParameter(["12","20","26","50","100","200"], default="200", space='buy', optimize=False, load=True),
-            "close_above_ema_slow"      : CategoricalParameter([True, False], default=False, space='buy', optimize=False, load=True),
-            "close_above_ema_slow_len"  : CategoricalParameter(["15","50","200"], default="200", space='buy', optimize=False, load=True),
-            "sma200_rising"             : CategoricalParameter([True, False], default=False, space='buy', optimize=False, load=True),
-            "sma200_rising_val"         : CategoricalParameter(["20","30","36","44","50"], default="50", space='buy', optimize=False, load=True),
-            "sma200_1h_rising"          : CategoricalParameter([True, False], default=True, space='buy', optimize=False, load=True),
-            "sma200_1h_rising_val"      : CategoricalParameter(["20","30","36","44","50"], default="24", space='buy', optimize=False, load=True),
-            "safe_dips"                 : CategoricalParameter([True, False], default=False, space='buy', optimize=False, load=True),
-            "safe_dips_type"            : CategoricalParameter(["10","50","100"], default="100", space='buy', optimize=False, load=True),
-            "safe_pump"                 : CategoricalParameter([True, False], default=False, space='buy', optimize=False, load=True),
-            "safe_pump_type"            : CategoricalParameter(["10","50","100"], default="50", space='buy', optimize=False, load=True),
-            "safe_pump_period"          : CategoricalParameter(["24","36","48"], default="24", space='buy', optimize=False, load=True),
-            "btc_1h_not_downtrend"      : CategoricalParameter([True, False], default=False, space='buy', optimize=False, load=True)
+            "ema_fast"                  : False,
+            "ema_fast_len"              : "50",
+            "ema_slow"                  : False,
+            "ema_slow_len"              : "50",
+            "close_above_ema_fast"      : False,
+            "close_above_ema_fast_len"  : "200",
+            "close_above_ema_slow"      : False,
+            "close_above_ema_slow_len"  : "200",
+            "sma200_rising"             : False,
+            "sma200_rising_val"         : "50",
+            "sma200_1h_rising"          : True,
+            "sma200_1h_rising_val"      : "24",
+            "safe_dips"                 : True,
+            "safe_dips_type"            : "130",
+            "safe_pump"                 : True,
+            "safe_pump_type"            : "40",
+            "safe_pump_period"          : "24",
+            "btc_1h_not_downtrend"      : False
         },
         13: {
-            "enable"                    : CategoricalParameter([True, False], default=True, space='buy', optimize=False, load=True),
-            "ema_fast"                  : CategoricalParameter([True, False], default=False, space='buy', optimize=False, load=True),
-            "ema_fast_len"              : CategoricalParameter(["26","50","100","200"], default="50", space='buy', optimize=False, load=True),
-            "ema_slow"                  : CategoricalParameter([True, False], default=False, space='buy', optimize=False, load=True),
-            "ema_slow_len"              : CategoricalParameter(["26","50","100","200"], default="50", space='buy', optimize=False, load=True),
-            "close_above_ema_fast"      : CategoricalParameter([True, False], default=False, space='buy', optimize=False, load=True),
-            "close_above_ema_fast_len"  : CategoricalParameter(["12","20","26","50","100","200"], default="200", space='buy', optimize=False, load=True),
-            "close_above_ema_slow"      : CategoricalParameter([True, False], default=False, space='buy', optimize=False, load=True),
-            "close_above_ema_slow_len"  : CategoricalParameter(["15","50","200"], default="200", space='buy', optimize=False, load=True),
-            "sma200_rising"             : CategoricalParameter([True, False], default=False, space='buy', optimize=False, load=True),
-            "sma200_rising_val"         : CategoricalParameter(["20","30","36","44","50"], default="50", space='buy', optimize=False, load=True),
-            "sma200_1h_rising"          : CategoricalParameter([True, False], default=True, space='buy', optimize=False, load=True),
-            "sma200_1h_rising_val"      : CategoricalParameter(["20","30","36","44","50"], default="24", space='buy', optimize=False, load=True),
-            "safe_dips"                 : CategoricalParameter([True, False], default=True, space='buy', optimize=False, load=True),
-            "safe_dips_type"            : CategoricalParameter(["10","50","100"], default="20", space='buy', optimize=False, load=True),
-            "safe_pump"                 : CategoricalParameter([True, False], default=False, space='buy', optimize=False, load=True),
-            "safe_pump_type"            : CategoricalParameter(["10","50","100"], default="50", space='buy', optimize=False, load=True),
-            "safe_pump_period"          : CategoricalParameter(["24","36","48"], default="24", space='buy', optimize=False, load=True),
-            "btc_1h_not_downtrend"      : CategoricalParameter([True, False], default=False, space='buy', optimize=False, load=True)
+            "ema_fast"                  : False,
+            "ema_fast_len"              : "50",
+            "ema_slow"                  : False,
+            "ema_slow_len"              : "50",
+            "close_above_ema_fast"      : False,
+            "close_above_ema_fast_len"  : "200",
+            "close_above_ema_slow"      : False,
+            "close_above_ema_slow_len"  : "200",
+            "sma200_rising"             : False,
+            "sma200_rising_val"         : "50",
+            "sma200_1h_rising"          : True,
+            "sma200_1h_rising_val"      : "24",
+            "safe_dips"                 : True,
+            "safe_dips_type"            : "130",
+            "safe_pump"                 : False,
+            "safe_pump_type"            : "50",
+            "safe_pump_period"          : "24",
+            "btc_1h_not_downtrend"      : False
         },
         14: {
-            "enable"                    : CategoricalParameter([True, False], default=True, space='buy', optimize=False, load=True),
-            "ema_fast"                  : CategoricalParameter([True, False], default=False, space='buy', optimize=False, load=True),
-            "ema_fast_len"              : CategoricalParameter(["26","50","100","200"], default="50", space='buy', optimize=False, load=True),
-            "ema_slow"                  : CategoricalParameter([True, False], default=False, space='buy', optimize=False, load=True),
-            "ema_slow_len"              : CategoricalParameter(["26","50","100","200"], default="50", space='buy', optimize=False, load=True),
-            "close_above_ema_fast"      : CategoricalParameter([True, False], default=False, space='buy', optimize=False, load=True),
-            "close_above_ema_fast_len"  : CategoricalParameter(["12","20","26","50","100","200"], default="200", space='buy', optimize=False, load=True),
-            "close_above_ema_slow"      : CategoricalParameter([True, False], default=False, space='buy', optimize=False, load=True),
-            "close_above_ema_slow_len"  : CategoricalParameter(["15","50","200"], default="200", space='buy', optimize=False, load=True),
-            "sma200_rising"             : CategoricalParameter([True, False], default=True, space='buy', optimize=False, load=True),
-            "sma200_rising_val"         : CategoricalParameter(["20","30","36","44","50"], default="30", space='buy', optimize=False, load=True),
-            "sma200_1h_rising"          : CategoricalParameter([True, False], default=True, space='buy', optimize=False, load=True),
-            "sma200_1h_rising_val"      : CategoricalParameter(["20","30","36","44","50"], default="50", space='buy', optimize=False, load=True),
-            "safe_dips"                 : CategoricalParameter([True, False], default=True, space='buy', optimize=False, load=True),
-            "safe_dips_type"            : CategoricalParameter(["10","50","100"], default="10", space='buy', optimize=False, load=True),
-            "safe_pump"                 : CategoricalParameter([True, False], default=True, space='buy', optimize=False, load=True),
-            "safe_pump_type"            : CategoricalParameter(["10","50","100"], default="70", space='buy', optimize=False, load=True),
-            "safe_pump_period"          : CategoricalParameter(["24","36","48"], default="24", space='buy', optimize=False, load=True),
-            "btc_1h_not_downtrend"      : CategoricalParameter([True, False], default=False, space='buy', optimize=False, load=True)
+            "ema_fast"                  : False,
+            "ema_fast_len"              : "50",
+            "ema_slow"                  : False,
+            "ema_slow_len"              : "50",
+            "close_above_ema_fast"      : False,
+            "close_above_ema_fast_len"  : "200",
+            "close_above_ema_slow"      : False,
+            "close_above_ema_slow_len"  : "200",
+            "sma200_rising"             : True,
+            "sma200_rising_val"         : "30",
+            "sma200_1h_rising"          : True,
+            "sma200_1h_rising_val"      : "50",
+            "safe_dips"                 : True,
+            "safe_dips_type"            : "120",
+            "safe_pump"                 : False,
+            "safe_pump_type"            : "100",
+            "safe_pump_period"          : "24",
+            "btc_1h_not_downtrend"      : False
         },
         15: {
-            "enable"                    : CategoricalParameter([True, False], default=True, space='buy', optimize=False, load=True),
-            "ema_fast"                  : CategoricalParameter([True, False], default=False, space='buy', optimize=False, load=True),
-            "ema_fast_len"              : CategoricalParameter(["26","50","100","200"], default="50", space='buy', optimize=False, load=True),
-            "ema_slow"                  : CategoricalParameter([True, False], default=True, space='buy', optimize=False, load=True),
-            "ema_slow_len"              : CategoricalParameter(["26","50","100","200"], default="50", space='buy', optimize=False, load=True),
-            "close_above_ema_fast"      : CategoricalParameter([True, False], default=False, space='buy', optimize=False, load=True),
-            "close_above_ema_fast_len"  : CategoricalParameter(["12","20","26","50","100","200"], default="200", space='buy', optimize=False, load=True),
-            "close_above_ema_slow"      : CategoricalParameter([True, False], default=False, space='buy', optimize=False, load=True),
-            "close_above_ema_slow_len"  : CategoricalParameter(["15","50","200"], default="200", space='buy', optimize=False, load=True),
-            "sma200_rising"             : CategoricalParameter([True, False], default=False, space='buy', optimize=False, load=True),
-            "sma200_rising_val"         : CategoricalParameter(["20","30","36","44","50"], default="50", space='buy', optimize=False, load=True),
-            "sma200_1h_rising"          : CategoricalParameter([True, False], default=False, space='buy', optimize=False, load=True),
-            "sma200_1h_rising_val"      : CategoricalParameter(["20","30","36","44","50"], default="50", space='buy', optimize=False, load=True),
-            "safe_dips"                 : CategoricalParameter([True, False], default=True, space='buy', optimize=False, load=True),
-            "safe_dips_type"            : CategoricalParameter(["10","50","100"], default="130", space='buy', optimize=False, load=True),
-            "safe_pump"                 : CategoricalParameter([True, False], default=True, space='buy', optimize=False, load=True),
-            "safe_pump_type"            : CategoricalParameter(["10","50","100"], default="20", space='buy', optimize=False, load=True),
-            "safe_pump_period"          : CategoricalParameter(["24","36","48"], default="36", space='buy', optimize=False, load=True),
-            "btc_1h_not_downtrend"      : CategoricalParameter([True, False], default=False, space='buy', optimize=False, load=True)
+            "ema_fast"                  : False,
+            "ema_fast_len"              : "50",
+            "ema_slow"                  : True,
+            "ema_slow_len"              : "50",
+            "close_above_ema_fast"      : False,
+            "close_above_ema_fast_len"  : "200",
+            "close_above_ema_slow"      : False,
+            "close_above_ema_slow_len"  : "200",
+            "sma200_rising"             : False,
+            "sma200_rising_val"         : "50",
+            "sma200_1h_rising"          : False,
+            "sma200_1h_rising_val"      : "50",
+            "safe_dips"                 : True,
+            "safe_dips_type"            : "130",
+            "safe_pump"                 : True,
+            "safe_pump_type"            : "20",
+            "safe_pump_period"          : "36",
+            "btc_1h_not_downtrend"      : False
         },
         16: {
-            "enable"                    : CategoricalParameter([True, False], default=True, space='buy', optimize=False, load=True),
-            "ema_fast"                  : CategoricalParameter([True, False], default=False, space='buy', optimize=False, load=True),
-            "ema_fast_len"              : CategoricalParameter(["26","50","100","200"], default="50", space='buy', optimize=False, load=True),
-            "ema_slow"                  : CategoricalParameter([True, False], default=True, space='buy', optimize=False, load=True),
-            "ema_slow_len"              : CategoricalParameter(["26","50","100","200"], default="50", space='buy', optimize=False, load=True),
-            "close_above_ema_fast"      : CategoricalParameter([True, False], default=False, space='buy', optimize=False, load=True),
-            "close_above_ema_fast_len"  : CategoricalParameter(["12","20","26","50","100","200"], default="200", space='buy', optimize=False, load=True),
-            "close_above_ema_slow"      : CategoricalParameter([True, False], default=False, space='buy', optimize=False, load=True),
-            "close_above_ema_slow_len"  : CategoricalParameter(["15","50","200"], default="50", space='buy', optimize=False, load=True),
-            "sma200_rising"             : CategoricalParameter([True, False], default=False, space='buy', optimize=False, load=True),
-            "sma200_rising_val"         : CategoricalParameter(["20","30","36","44","50"], default="50", space='buy', optimize=False, load=True),
-            "sma200_1h_rising"          : CategoricalParameter([True, False], default=False, space='buy', optimize=False, load=True),
-            "sma200_1h_rising_val"      : CategoricalParameter(["20","30","36","44","50"], default="50", space='buy', optimize=False, load=True),
-            "safe_dips"                 : CategoricalParameter([True, False], default=True, space='buy', optimize=False, load=True),
-            "safe_dips_type"            : CategoricalParameter(["10","50","100"], default="10", space='buy', optimize=False, load=True),
-            "safe_pump"                 : CategoricalParameter([True, False], default=True, space='buy', optimize=False, load=True),
-            "safe_pump_type"            : CategoricalParameter(["10","50","100"], default="10", space='buy', optimize=False, load=True),
-            "safe_pump_period"          : CategoricalParameter(["24","36","48"], default="24", space='buy', optimize=False, load=True),
-            "btc_1h_not_downtrend"      : CategoricalParameter([True, False], default=False, space='buy', optimize=False, load=True)
+            "ema_fast"                  : False,
+            "ema_fast_len"              : "50",
+            "ema_slow"                  : True,
+            "ema_slow_len"              : "50",
+            "close_above_ema_fast"      : False,
+            "close_above_ema_fast_len"  : "200",
+            "close_above_ema_slow"      : False,
+            "close_above_ema_slow_len"  : "50",
+            "sma200_rising"             : False,
+            "sma200_rising_val"         : "50",
+            "sma200_1h_rising"          : False,
+            "sma200_1h_rising_val"      : "50",
+            "safe_dips"                 : True,
+            "safe_dips_type"            : "10",
+            "safe_pump"                 : True,
+            "safe_pump_type"            : "10",
+            "safe_pump_period"          : "24",
+            "btc_1h_not_downtrend"      : False
         },
         17: {
-            "enable"                    : CategoricalParameter([True, False], default=True, space='buy', optimize=False, load=True),
-            "ema_fast"                  : CategoricalParameter([True, False], default=False, space='buy', optimize=False, load=True),
-            "ema_fast_len"              : CategoricalParameter(["26","50","100","200"], default="50", space='buy', optimize=False, load=True),
-            "ema_slow"                  : CategoricalParameter([True, False], default=False, space='buy', optimize=False, load=True),
-            "ema_slow_len"              : CategoricalParameter(["26","50","100","200"], default="50", space='buy', optimize=False, load=True),
-            "close_above_ema_fast"      : CategoricalParameter([True, False], default=False, space='buy', optimize=False, load=True),
-            "close_above_ema_fast_len"  : CategoricalParameter(["12","20","26","50","100","200"], default="200", space='buy', optimize=False, load=True),
-            "close_above_ema_slow"      : CategoricalParameter([True, False], default=False, space='buy', optimize=False, load=True),
-            "close_above_ema_slow_len"  : CategoricalParameter(["15","50","200"], default="200", space='buy', optimize=False, load=True),
-            "sma200_rising"             : CategoricalParameter([True, False], default=False, space='buy', optimize=False, load=True),
-            "sma200_rising_val"         : CategoricalParameter(["20","30","36","44","50"], default="50", space='buy', optimize=False, load=True),
-            "sma200_1h_rising"          : CategoricalParameter([True, False], default=False, space='buy', optimize=False, load=True),
-            "sma200_1h_rising_val"      : CategoricalParameter(["20","30","36","44","50"], default="50", space='buy', optimize=False, load=True),
-            "safe_dips"                 : CategoricalParameter([True, False], default=True, space='buy', optimize=False, load=True),
-            "safe_dips_type"            : CategoricalParameter(["10","50","100"], default="10", space='buy', optimize=False, load=True),
-            "safe_pump"                 : CategoricalParameter([True, False], default=True, space='buy', optimize=False, load=True),
-            "safe_pump_type"            : CategoricalParameter(["10","50","100"], default="120", space='buy', optimize=False, load=True),
-            "safe_pump_period"          : CategoricalParameter(["24","36","48"], default="24", space='buy', optimize=False, load=True),
-            "btc_1h_not_downtrend"      : CategoricalParameter([True, False], default=False, space='buy', optimize=False, load=True)
+            "ema_fast"                  : False,
+            "ema_fast_len"              : "50",
+            "ema_slow"                  : False,
+            "ema_slow_len"              : "50",
+            "close_above_ema_fast"      : False,
+            "close_above_ema_fast_len"  : "200",
+            "close_above_ema_slow"      : False,
+            "close_above_ema_slow_len"  : "200",
+            "sma200_rising"             : False,
+            "sma200_rising_val"         : "50",
+            "sma200_1h_rising"          : False,
+            "sma200_1h_rising_val"      : "50",
+            "safe_dips"                 : True,
+            "safe_dips_type"            : "130",
+            "safe_pump"                 : False,
+            "safe_pump_type"            : "120",
+            "safe_pump_period"          : "24",
+            "btc_1h_not_downtrend"      : False
         },
         18: {
-            "enable"                    : CategoricalParameter([True, False], default=True, space='buy', optimize=False, load=True),
-            "ema_fast"                  : CategoricalParameter([True, False], default=True, space='buy', optimize=False, load=True),
-            "ema_fast_len"              : CategoricalParameter(["26","50","100","200"], default="100", space='buy', optimize=False, load=True),
-            "ema_slow"                  : CategoricalParameter([True, False], default=True, space='buy', optimize=False, load=True),
-            "ema_slow_len"              : CategoricalParameter(["26","50","100","200"], default="50", space='buy', optimize=False, load=True),
-            "close_above_ema_fast"      : CategoricalParameter([True, False], default=False, space='buy', optimize=False, load=True),
-            "close_above_ema_fast_len"  : CategoricalParameter(["12","20","26","50","100","200"], default="200", space='buy', optimize=False, load=True),
-            "close_above_ema_slow"      : CategoricalParameter([True, False], default=True, space='buy', optimize=False, load=True),
-            "close_above_ema_slow_len"  : CategoricalParameter(["15","50","200"], default="200", space='buy', optimize=False, load=True),
-            "sma200_rising"             : CategoricalParameter([True, False], default=True, space='buy', optimize=False, load=True),
-            "sma200_rising_val"         : CategoricalParameter(["20","30","36","44","50"], default="44", space='buy', optimize=False, load=True),
-            "sma200_1h_rising"          : CategoricalParameter([True, False], default=True, space='buy', optimize=False, load=True),
-            "sma200_1h_rising_val"      : CategoricalParameter(["20","30","36","44","50"], default="72", space='buy', optimize=False, load=True),
-            "safe_dips"                 : CategoricalParameter([True, False], default=True, space='buy', optimize=False, load=True),
-            "safe_dips_type"            : CategoricalParameter(["10","50","100"], default="100", space='buy', optimize=False, load=True),
-            "safe_pump"                 : CategoricalParameter([True, False], default=True, space='buy', optimize=False, load=True),
-            "safe_pump_type"            : CategoricalParameter(["10","50","100"], default="60", space='buy', optimize=False, load=True),
-            "safe_pump_period"          : CategoricalParameter(["24","36","48"], default="24", space='buy', optimize=False, load=True),
-            "btc_1h_not_downtrend"      : CategoricalParameter([True, False], default=False, space='buy', optimize=False, load=True)
+            "ema_fast"                  : True,
+            "ema_fast_len"              : "100",
+            "ema_slow"                  : True,
+            "ema_slow_len"              : "50",
+            "close_above_ema_fast"      : False,
+            "close_above_ema_fast_len"  : "200",
+            "close_above_ema_slow"      : True,
+            "close_above_ema_slow_len"  : "200",
+            "sma200_rising"             : True,
+            "sma200_rising_val"         : "44",
+            "sma200_1h_rising"          : True,
+            "sma200_1h_rising_val"      : "72",
+            "safe_dips"                 : True,
+            "safe_dips_type"            : "100",
+            "safe_pump"                 : True,
+            "safe_pump_type"            : "120",
+            "safe_pump_period"          : "24",
+            "btc_1h_not_downtrend"      : False
         },
         19: {
-            "enable"                    : CategoricalParameter([True, False], default=True, space='buy', optimize=False, load=True),
-            "ema_fast"                  : CategoricalParameter([True, False], default=False, space='buy', optimize=False, load=True),
-            "ema_fast_len"              : CategoricalParameter(["26","50","100","200"], default="50", space='buy', optimize=False, load=True),
-            "ema_slow"                  : CategoricalParameter([True, False], default=True, space='buy', optimize=False, load=True),
-            "ema_slow_len"              : CategoricalParameter(["26","50","100","200"], default="100", space='buy', optimize=False, load=True),
-            "close_above_ema_fast"      : CategoricalParameter([True, False], default=False, space='buy', optimize=False, load=True),
-            "close_above_ema_fast_len"  : CategoricalParameter(["12","20","26","50","100","200"], default="200", space='buy', optimize=False, load=True),
-            "close_above_ema_slow"      : CategoricalParameter([True, False], default=False, space='buy', optimize=False, load=True),
-            "close_above_ema_slow_len"  : CategoricalParameter(["15","50","200"], default="200", space='buy', optimize=False, load=True),
-            "sma200_rising"             : CategoricalParameter([True, False], default=True, space='buy', optimize=False, load=True),
-            "sma200_rising_val"         : CategoricalParameter(["20","30","36","44","50"], default="36", space='buy', optimize=False, load=True),
-            "sma200_1h_rising"          : CategoricalParameter([True, False], default=False, space='buy', optimize=False, load=True),
-            "sma200_1h_rising_val"      : CategoricalParameter(["20","30","36","44","50"], default="50", space='buy', optimize=False, load=True),
-            "safe_dips"                 : CategoricalParameter([True, False], default=True, space='buy', optimize=False, load=True),
-            "safe_dips_type"            : CategoricalParameter(["10","50","100"], default="50", space='buy', optimize=False, load=True),
-            "safe_pump"                 : CategoricalParameter([True, False], default=False, space='buy', optimize=False, load=True),
-            "safe_pump_type"            : CategoricalParameter(["10","50","100"], default="50", space='buy', optimize=False, load=True),
-            "safe_pump_period"          : CategoricalParameter(["24","36","48"], default="24", space='buy', optimize=False, load=True),
-            "btc_1h_not_downtrend"      : CategoricalParameter([True, False], default=False, space='buy', optimize=False, load=True)
+            "ema_fast"                  : True,
+            "ema_fast_len"              : "50",
+            "ema_slow"                  : True,
+            "ema_slow_len"              : "100",
+            "close_above_ema_fast"      : False,
+            "close_above_ema_fast_len"  : "200",
+            "close_above_ema_slow"      : False,
+            "close_above_ema_slow_len"  : "200",
+            "sma200_rising"             : False,
+            "sma200_rising_val"         : "36",
+            "sma200_1h_rising"          : False,
+            "sma200_1h_rising_val"      : "50",
+            "safe_dips"                 : True,
+            "safe_dips_type"            : "130",
+            "safe_pump"                 : False,
+            "safe_pump_type"            : "50",
+            "safe_pump_period"          : "24",
+            "btc_1h_not_downtrend"      : False
         },
         20: {
-            "enable"                    : CategoricalParameter([True, False], default=True, space='buy', optimize=False, load=True),
-            "ema_fast"                  : CategoricalParameter([True, False], default=False, space='buy', optimize=False, load=True),
-            "ema_fast_len"              : CategoricalParameter(["26","50","100","200"], default="50", space='buy', optimize=False, load=True),
-            "ema_slow"                  : CategoricalParameter([True, False], default=True, space='buy', optimize=False, load=True),
-            "ema_slow_len"              : CategoricalParameter(["26","50","100","200"], default="50", space='buy', optimize=False, load=True),
-            "close_above_ema_fast"      : CategoricalParameter([True, False], default=False, space='buy', optimize=False, load=True),
-            "close_above_ema_fast_len"  : CategoricalParameter(["12","20","26","50","100","200"], default="200", space='buy', optimize=False, load=True),
-            "close_above_ema_slow"      : CategoricalParameter([True, False], default=False, space='buy', optimize=False, load=True),
-            "close_above_ema_slow_len"  : CategoricalParameter(["15","50","200"], default="200", space='buy', optimize=False, load=True),
-            "sma200_rising"             : CategoricalParameter([True, False], default=False, space='buy', optimize=False, load=True),
-            "sma200_rising_val"         : CategoricalParameter(["20","30","36","44","50"], default="50", space='buy', optimize=False, load=True),
-            "sma200_1h_rising"          : CategoricalParameter([True, False], default=False, space='buy', optimize=False, load=True),
-            "sma200_1h_rising_val"      : CategoricalParameter(["20","30","36","44","50"], default="50", space='buy', optimize=False, load=True),
-            "safe_dips"                 : CategoricalParameter([True, False], default=False, space='buy', optimize=False, load=True),
-            "safe_dips_type"            : CategoricalParameter(["10","50","100"], default="10", space='buy', optimize=False, load=True),
-            "safe_pump"                 : CategoricalParameter([True, False], default=False, space='buy', optimize=False, load=True),
-            "safe_pump_type"            : CategoricalParameter(["10","50","100"], default="50", space='buy', optimize=False, load=True),
-            "safe_pump_period"          : CategoricalParameter(["24","36","48"], default="24", space='buy', optimize=False, load=True),
-            "btc_1h_not_downtrend"      : CategoricalParameter([True, False], default=False, space='buy', optimize=False, load=True)
+            "ema_fast"                  : False,
+            "ema_fast_len"              : "50",
+            "ema_slow"                  : True,
+            "ema_slow_len"              : "50",
+            "close_above_ema_fast"      : False,
+            "close_above_ema_fast_len"  : "200",
+            "close_above_ema_slow"      : False,
+            "close_above_ema_slow_len"  : "200",
+            "sma200_rising"             : False,
+            "sma200_rising_val"         : "50",
+            "sma200_1h_rising"          : False,
+            "sma200_1h_rising_val"      : "50",
+            "safe_dips"                 : False,
+            "safe_dips_type"            : "10",
+            "safe_pump"                 : False,
+            "safe_pump_type"            : "50",
+            "safe_pump_period"          : "24",
+            "btc_1h_not_downtrend"      : False
         },
         21: {
-            "enable"                    : CategoricalParameter([True, False], default=True, space='buy', optimize=False, load=True),
-            "ema_fast"                  : CategoricalParameter([True, False], default=False, space='buy', optimize=False, load=True),
-            "ema_fast_len"              : CategoricalParameter(["26","50","100","200"], default="50", space='buy', optimize=False, load=True),
-            "ema_slow"                  : CategoricalParameter([True, False], default=True, space='buy', optimize=False, load=True),
-            "ema_slow_len"              : CategoricalParameter(["26","50","100","200"], default="50", space='buy', optimize=False, load=True),
-            "close_above_ema_fast"      : CategoricalParameter([True, False], default=False, space='buy', optimize=False, load=True),
-            "close_above_ema_fast_len"  : CategoricalParameter(["12","20","26","50","100","200"], default="200", space='buy', optimize=False, load=True),
-            "close_above_ema_slow"      : CategoricalParameter([True, False], default=False, space='buy', optimize=False, load=True),
-            "close_above_ema_slow_len"  : CategoricalParameter(["15","50","200"], default="200", space='buy', optimize=False, load=True),
-            "sma200_rising"             : CategoricalParameter([True, False], default=False, space='buy', optimize=False, load=True),
-            "sma200_rising_val"         : CategoricalParameter(["20","30","36","44","50"], default="50", space='buy', optimize=False, load=True),
-            "sma200_1h_rising"          : CategoricalParameter([True, False], default=False, space='buy', optimize=False, load=True),
-            "sma200_1h_rising_val"      : CategoricalParameter(["20","30","36","44","50"], default="50", space='buy', optimize=False, load=True),
-            "safe_dips"                 : CategoricalParameter([True, False], default=True, space='buy', optimize=False, load=True),
-            "safe_dips_type"            : CategoricalParameter(["10","50","100"], default="90", space='buy', optimize=False, load=True),
-            "safe_pump"                 : CategoricalParameter([True, False], default=False, space='buy', optimize=False, load=True),
-            "safe_pump_type"            : CategoricalParameter(["10","50","100"], default="50", space='buy', optimize=False, load=True),
-            "safe_pump_period"          : CategoricalParameter(["24","36","48"], default="24", space='buy', optimize=False, load=True),
-            "btc_1h_not_downtrend"      : CategoricalParameter([True, False], default=False, space='buy', optimize=False, load=True)
+            "ema_fast"                  : False,
+            "ema_fast_len"              : "50",
+            "ema_slow"                  : True,
+            "ema_slow_len"              : "50",
+            "close_above_ema_fast"      : False,
+            "close_above_ema_fast_len"  : "200",
+            "close_above_ema_slow"      : False,
+            "close_above_ema_slow_len"  : "200",
+            "sma200_rising"             : False,
+            "sma200_rising_val"         : "50",
+            "sma200_1h_rising"          : False,
+            "sma200_1h_rising_val"      : "50",
+            "safe_dips"                 : True,
+            "safe_dips_type"            : "90",
+            "safe_pump"                 : False,
+            "safe_pump_type"            : "50",
+            "safe_pump_period"          : "24",
+            "btc_1h_not_downtrend"      : False
         },
         22: {
-            "enable"                    : CategoricalParameter([True, False], default=True, space='buy', optimize=False, load=True),
-            "ema_fast"                  : CategoricalParameter([True, False], default=False, space='buy', optimize=False, load=True),
-            "ema_fast_len"              : CategoricalParameter(["26","50","100","200"], default="50", space='buy', optimize=False, load=True),
-            "ema_slow"                  : CategoricalParameter([True, False], default=False, space='buy', optimize=False, load=True),
-            "ema_slow_len"              : CategoricalParameter(["26","50","100","200"], default="50", space='buy', optimize=False, load=True),
-            "close_above_ema_fast"      : CategoricalParameter([True, False], default=False, space='buy', optimize=False, load=True),
-            "close_above_ema_fast_len"  : CategoricalParameter(["12","20","26","50","100","200"], default="200", space='buy', optimize=False, load=True),
-            "close_above_ema_slow"      : CategoricalParameter([True, False], default=False, space='buy', optimize=False, load=True),
-            "close_above_ema_slow_len"  : CategoricalParameter(["15","50","200"], default="200", space='buy', optimize=False, load=True),
-            "sma200_rising"             : CategoricalParameter([True, False], default=False, space='buy', optimize=False, load=True),
-            "sma200_rising_val"         : CategoricalParameter(["20","30","36","44","50"], default="50", space='buy', optimize=False, load=True),
-            "sma200_1h_rising"          : CategoricalParameter([True, False], default=False, space='buy', optimize=False, load=True),
-            "sma200_1h_rising_val"      : CategoricalParameter(["20","30","36","44","50"], default="50", space='buy', optimize=False, load=True),
-            "safe_dips"                 : CategoricalParameter([True, False], default=True, space='buy', optimize=False, load=True),
-            "safe_dips_type"            : CategoricalParameter(["10","50","100"], default="110", space='buy', optimize=False, load=True),
-            "safe_pump"                 : CategoricalParameter([True, False], default=False, space='buy', optimize=False, load=True),
-            "safe_pump_type"            : CategoricalParameter(["10","50","100"], default="50", space='buy', optimize=False, load=True),
-            "safe_pump_period"          : CategoricalParameter(["24","36","48"], default="24", space='buy', optimize=False, load=True),
-            "btc_1h_not_downtrend"      : CategoricalParameter([True, False], default=False, space='buy', optimize=False, load=True)
+            "ema_fast"                  : False,
+            "ema_fast_len"              : "50",
+            "ema_slow"                  : False,
+            "ema_slow_len"              : "50",
+            "close_above_ema_fast"      : False,
+            "close_above_ema_fast_len"  : "200",
+            "close_above_ema_slow"      : False,
+            "close_above_ema_slow_len"  : "200",
+            "sma200_rising"             : False,
+            "sma200_rising_val"         : "50",
+            "sma200_1h_rising"          : False,
+            "sma200_1h_rising_val"      : "50",
+            "safe_dips"                 : True,
+            "safe_dips_type"            : "130",
+            "safe_pump"                 : True,
+            "safe_pump_type"            : "110",
+            "safe_pump_period"          : "24",
+            "btc_1h_not_downtrend"      : False
         },
         23: {
-            "enable"                    : CategoricalParameter([True, False], default=True, space='buy', optimize=False, load=True),
-            "ema_fast"                  : CategoricalParameter([True, False], default=False, space='buy', optimize=False, load=True),
-            "ema_fast_len"              : CategoricalParameter(["26","50","100","200"], default="50", space='buy', optimize=False, load=True),
-            "ema_slow"                  : CategoricalParameter([True, False], default=False, space='buy', optimize=False, load=True),
-            "ema_slow_len"              : CategoricalParameter(["26","50","100","200"], default="50", space='buy', optimize=False, load=True),
-            "close_above_ema_fast"      : CategoricalParameter([True, False], default=True, space='buy', optimize=False, load=True),
-            "close_above_ema_fast_len"  : CategoricalParameter(["12","20","26","50","100","200"], default="200", space='buy', optimize=False, load=True),
-            "close_above_ema_slow"      : CategoricalParameter([True, False], default=True, space='buy', optimize=False, load=True),
-            "close_above_ema_slow_len"  : CategoricalParameter(["15","50","200"], default="200", space='buy', optimize=False, load=True),
-            "sma200_rising"             : CategoricalParameter([True, False], default=False, space='buy', optimize=False, load=True),
-            "sma200_rising_val"         : CategoricalParameter(["20","30","36","44","50"], default="50", space='buy', optimize=False, load=True),
-            "sma200_1h_rising"          : CategoricalParameter([True, False], default=False, space='buy', optimize=False, load=True),
-            "sma200_1h_rising_val"      : CategoricalParameter(["20","30","36","44","50"], default="50", space='buy', optimize=False, load=True),
-            "safe_dips"                 : CategoricalParameter([True, False], default=True, space='buy', optimize=False, load=True),
-            "safe_dips_type"            : CategoricalParameter(["10","50","100"], default="100", space='buy', optimize=False, load=True),
-            "safe_pump"                 : CategoricalParameter([True, False], default=False, space='buy', optimize=False, load=True),
-            "safe_pump_type"            : CategoricalParameter(["10","50","100"], default="50", space='buy', optimize=False, load=True),
-            "safe_pump_period"          : CategoricalParameter(["24","36","48"], default="24", space='buy', optimize=False, load=True),
-            "btc_1h_not_downtrend"      : CategoricalParameter([True, False], default=False, space='buy', optimize=False, load=True)
+            "ema_fast"                  : False,
+            "ema_fast_len"              : "50",
+            "ema_slow"                  : True,
+            "ema_slow_len"              : "15",
+            "close_above_ema_fast"      : False,
+            "close_above_ema_fast_len"  : "200",
+            "close_above_ema_slow"      : False,
+            "close_above_ema_slow_len"  : "200",
+            "sma200_rising"             : True,
+            "sma200_rising_val"         : "24",
+            "sma200_1h_rising"          : False,
+            "sma200_1h_rising_val"      : "50",
+            "safe_dips"                 : True,
+            "safe_dips_type"            : "110",
+            "safe_pump"                 : True,
+            "safe_pump_type"            : "100",
+            "safe_pump_period"          : "24",
+            "btc_1h_not_downtrend"      : False
         },
         24: {
-            "enable"                    : CategoricalParameter([True, False], default=True, space='buy', optimize=False, load=True),
-            "ema_fast"                  : CategoricalParameter([True, False], default=False, space='buy', optimize=False, load=True),
-            "ema_fast_len"              : CategoricalParameter(["26","50","100","200"], default="50", space='buy', optimize=False, load=True),
-            "ema_slow"                  : CategoricalParameter([True, False], default=False, space='buy', optimize=False, load=True),
-            "ema_slow_len"              : CategoricalParameter(["26","50","100","200"], default="50", space='buy', optimize=False, load=True),
-            "close_above_ema_fast"      : CategoricalParameter([True, False], default=False, space='buy', optimize=False, load=True),
-            "close_above_ema_fast_len"  : CategoricalParameter(["12","20","26","50","100","200"], default="200", space='buy', optimize=False, load=True),
-            "close_above_ema_slow"      : CategoricalParameter([True, False], default=False, space='buy', optimize=False, load=True),
-            "close_above_ema_slow_len"  : CategoricalParameter(["15","50","200"], default="200", space='buy', optimize=False, load=True),
-            "sma200_rising"             : CategoricalParameter([True, False], default=False, space='buy', optimize=False, load=True),
-            "sma200_rising_val"         : CategoricalParameter(["20","30","36","44","50"], default="30", space='buy', optimize=False, load=True),
-            "sma200_1h_rising"          : CategoricalParameter([True, False], default=True, space='buy', optimize=False, load=True),
-            "sma200_1h_rising_val"      : CategoricalParameter(["20","30","36","44","50"], default="36", space='buy', optimize=False, load=True),
-            "safe_dips"                 : CategoricalParameter([True, False], default=True, space='buy', optimize=False, load=True),
-            "safe_dips_type"            : CategoricalParameter(["10","50","100"], default="20", space='buy', optimize=False, load=True),
-            "safe_pump"                 : CategoricalParameter([True, False], default=False, space='buy', optimize=False, load=True),
-            "safe_pump_type"            : CategoricalParameter(["10","50","100"], default="50", space='buy', optimize=False, load=True),
-            "safe_pump_period"          : CategoricalParameter(["24","36","48"], default="24", space='buy', optimize=False, load=True),
-            "btc_1h_not_downtrend"      : CategoricalParameter([True, False], default=False, space='buy', optimize=False, load=True)
+            "ema_fast"                  : False,
+            "ema_fast_len"              : "50",
+            "ema_slow"                  : False,
+            "ema_slow_len"              : "50",
+            "close_above_ema_fast"      : False,
+            "close_above_ema_fast_len"  : "200",
+            "close_above_ema_slow"      : False,
+            "close_above_ema_slow_len"  : "200",
+            "sma200_rising"             : False,
+            "sma200_rising_val"         : "30",
+            "sma200_1h_rising"          : True,
+            "sma200_1h_rising_val"      : "36",
+            "safe_dips"                 : True,
+            "safe_dips_type"            : "20",
+            "safe_pump"                 : False,
+            "safe_pump_type"            : "10",
+            "safe_pump_period"          : "24",
+            "btc_1h_not_downtrend"      : False
         },
         25: {
-            "enable"                    : CategoricalParameter([True, False], default=True, space='buy', optimize=False, load=True),
-            "ema_fast"                  : CategoricalParameter([True, False], default=False, space='buy', optimize=False, load=True),
-            "ema_fast_len"              : CategoricalParameter(["26","50","100","200"], default="50", space='buy', optimize=False, load=True),
-            "ema_slow"                  : CategoricalParameter([True, False], default=False, space='buy', optimize=False, load=True),
-            "ema_slow_len"              : CategoricalParameter(["26","50","100","200"], default="100", space='buy', optimize=False, load=True),
-            "close_above_ema_fast"      : CategoricalParameter([True, False], default=False, space='buy', optimize=False, load=True),
-            "close_above_ema_fast_len"  : CategoricalParameter(["12","20","26","50","100","200"], default="50", space='buy', optimize=False, load=True),
-            "close_above_ema_slow"      : CategoricalParameter([True, False], default=False, space='buy', optimize=False, load=True),
-            "close_above_ema_slow_len"  : CategoricalParameter(["15","50","200"], default="200", space='buy', optimize=False, load=True),
-            "sma200_rising"             : CategoricalParameter([True, False], default=True, space='buy', optimize=False, load=True),
-            "sma200_rising_val"         : CategoricalParameter(["20","30","36","44","50"], default="20", space='buy', optimize=False, load=True),
-            "sma200_1h_rising"          : CategoricalParameter([True, False], default=False, space='buy', optimize=False, load=True),
-            "sma200_1h_rising_val"      : CategoricalParameter(["20","30","36","44","50"], default="50", space='buy', optimize=False, load=True),
-            "safe_dips"                 : CategoricalParameter([True, False], default=False, space='buy', optimize=False, load=True),
-            "safe_dips_type"            : CategoricalParameter(["10","50","100"], default="10", space='buy', optimize=False, load=True),
-            "safe_pump"                 : CategoricalParameter([True, False], default=True, space='buy', optimize=False, load=True),
-            "safe_pump_type"            : CategoricalParameter(["10","50","100"], default="20", space='buy', optimize=False, load=True),
-            "safe_pump_period"          : CategoricalParameter(["24","36","48"], default="24", space='buy', optimize=False, load=True),
-            "btc_1h_not_downtrend"      : CategoricalParameter([True, False], default=False, space='buy', optimize=False, load=True)
+            "ema_fast"                  : False,
+            "ema_fast_len"              : "50",
+            "ema_slow"                  : False,
+            "ema_slow_len"              : "100",
+            "close_above_ema_fast"      : False,
+            "close_above_ema_fast_len"  : "50",
+            "close_above_ema_slow"      : False,
+            "close_above_ema_slow_len"  : "200",
+            "sma200_rising"             : True,
+            "sma200_rising_val"         : "20",
+            "sma200_1h_rising"          : False,
+            "sma200_1h_rising_val"      : "50",
+            "safe_dips"                 : False,
+            "safe_dips_type"            : "10",
+            "safe_pump"                 : True,
+            "safe_pump_type"            : "20",
+            "safe_pump_period"          : "24",
+            "btc_1h_not_downtrend"      : False
         },
         26: {
-            "enable"                    : CategoricalParameter([True, False], default=True, space='buy', optimize=False, load=True),
-            "ema_fast"                  : CategoricalParameter([True, False], default=False, space='buy', optimize=False, load=True),
-            "ema_fast_len"              : CategoricalParameter(["26","50","100","200"], default="50", space='buy', optimize=False, load=True),
-            "ema_slow"                  : CategoricalParameter([True, False], default=True, space='buy', optimize=False, load=True),
-            "ema_slow_len"              : CategoricalParameter(["26","50","100","200"], default="100", space='buy', optimize=False, load=True),
-            "close_above_ema_fast"      : CategoricalParameter([True, False], default=True, space='buy', optimize=False, load=True),
-            "close_above_ema_fast_len"  : CategoricalParameter(["12","20","26","50","100","200"], default="50", space='buy', optimize=False, load=True),
-            "close_above_ema_slow"      : CategoricalParameter([True, False], default=False, space='buy', optimize=False, load=True),
-            "close_above_ema_slow_len"  : CategoricalParameter(["15","50","200"], default="200", space='buy', optimize=False, load=True),
-            "sma200_rising"             : CategoricalParameter([True, False], default=False, space='buy', optimize=False, load=True),
-            "sma200_rising_val"         : CategoricalParameter(["20","30","36","44","50"], default="30", space='buy', optimize=False, load=True),
-            "sma200_1h_rising"          : CategoricalParameter([True, False], default=False, space='buy', optimize=False, load=True),
-            "sma200_1h_rising_val"      : CategoricalParameter(["20","30","36","44","50"], default="50", space='buy', optimize=False, load=True),
-            "safe_dips"                 : CategoricalParameter([True, False], default=True, space='buy', optimize=False, load=True),
-            "safe_dips_type"            : CategoricalParameter(["10","50","100"], default="10", space='buy', optimize=False, load=True),
-            "safe_pump"                 : CategoricalParameter([True, False], default=True, space='buy', optimize=False, load=True),
-            "safe_pump_type"            : CategoricalParameter(["10","50","100"], default="100", space='buy', optimize=False, load=True),
-            "safe_pump_period"          : CategoricalParameter(["24","36","48"], default="48", space='buy', optimize=False, load=True),
-            "btc_1h_not_downtrend"      : CategoricalParameter([True, False], default=False, space='buy', optimize=False, load=True)
+            "ema_fast"                  : False,
+            "ema_fast_len"              : "100",
+            "ema_slow"                  : True,
+            "ema_slow_len"              : "12",
+            "close_above_ema_fast"      : False,
+            "close_above_ema_fast_len"  : "200",
+            "close_above_ema_slow"      : False,
+            "close_above_ema_slow_len"  : "200",
+            "sma200_rising"             : True,
+            "sma200_rising_val"         : "30",
+            "sma200_1h_rising"          : False,
+            "sma200_1h_rising_val"      : "50",
+            "safe_dips"                 : True,
+            "safe_dips_type"            : "70",
+            "safe_pump"                 : True,
+            "safe_pump_type"            : "20",
+            "safe_pump_period"          : "36",
+            "btc_1h_not_downtrend"      : True
         },
         27: {
-            "enable"                    : CategoricalParameter([True, False], default=True, space='buy', optimize=False, load=True),
-            "ema_fast"                  : CategoricalParameter([True, False], default=False, space='buy', optimize=False, load=True),
-            "ema_fast_len"              : CategoricalParameter(["26","50","100","200"], default="50", space='buy', optimize=False, load=True),
-            "ema_slow"                  : CategoricalParameter([True, False], default=False, space='buy', optimize=False, load=True),
-            "ema_slow_len"              : CategoricalParameter(["26","50","100","200"], default="100", space='buy', optimize=False, load=True),
-            "close_above_ema_fast"      : CategoricalParameter([True, False], default=False, space='buy', optimize=False, load=True),
-            "close_above_ema_fast_len"  : CategoricalParameter(["12","20","26","50","100","200"], default="50", space='buy', optimize=False, load=True),
-            "close_above_ema_slow"      : CategoricalParameter([True, False], default=False, space='buy', optimize=False, load=True),
-            "close_above_ema_slow_len"  : CategoricalParameter(["15","50","200"], default="200", space='buy', optimize=False, load=True),
-            "sma200_rising"             : CategoricalParameter([True, False], default=False, space='buy', optimize=False, load=True),
-            "sma200_rising_val"         : CategoricalParameter(["20","30","36","44","50"], default="30", space='buy', optimize=False, load=True),
-            "sma200_1h_rising"          : CategoricalParameter([True, False], default=False, space='buy', optimize=False, load=True),
-            "sma200_1h_rising_val"      : CategoricalParameter(["20","30","36","44","50"], default="50", space='buy', optimize=False, load=True),
-            "safe_dips"                 : CategoricalParameter([True, False], default=True, space='buy', optimize=False, load=True),
-            "safe_dips_type"            : CategoricalParameter(["10","50","100"], default="100", space='buy', optimize=False, load=True),
-            "safe_pump"                 : CategoricalParameter([True, False], default=True, space='buy', optimize=False, load=True),
-            "safe_pump_type"            : CategoricalParameter(["10","50","100"], default="50", space='buy', optimize=False, load=True),
-            "safe_pump_period"          : CategoricalParameter(["24","36","48"], default="36", space='buy', optimize=False, load=True),
-            "btc_1h_not_downtrend"      : CategoricalParameter([True, False], default=True, space='buy', optimize=False, load=True)
+            "ema_fast"                  : False,
+            "ema_fast_len"              : "50",
+            "ema_slow"                  : False,
+            "ema_slow_len"              : "100",
+            "close_above_ema_fast"      : False,
+            "close_above_ema_fast_len"  : "50",
+            "close_above_ema_slow"      : False,
+            "close_above_ema_slow_len"  : "200",
+            "sma200_rising"             : False,
+            "sma200_rising_val"         : "30",
+            "sma200_1h_rising"          : False,
+            "sma200_1h_rising_val"      : "50",
+            "safe_dips"                 : True,
+            "safe_dips_type"            : "130",
+            "safe_pump"                 : False,
+            "safe_pump_type"            : "50",
+            "safe_pump_period"          : "36",
+            "btc_1h_not_downtrend"      : True
         },
         28: {
-            "enable"                    : CategoricalParameter([True, False], default=True, space='buy', optimize=False, load=True),
-            "ema_fast"                  : CategoricalParameter([True, False], default=False, space='buy', optimize=False, load=True),
-            "ema_fast_len"              : CategoricalParameter(["26","50","100","200"], default="50", space='buy', optimize=False, load=True),
-            "ema_slow"                  : CategoricalParameter([True, False], default=False, space='buy', optimize=False, load=True),
-            "ema_slow_len"              : CategoricalParameter(["26","50","100","200"], default="100", space='buy', optimize=False, load=True),
-            "close_above_ema_fast"      : CategoricalParameter([True, False], default=False, space='buy', optimize=False, load=True),
-            "close_above_ema_fast_len"  : CategoricalParameter(["12","20","26","50","100","200"], default="50", space='buy', optimize=False, load=True),
-            "close_above_ema_slow"      : CategoricalParameter([True, False], default=False, space='buy', optimize=False, load=True),
-            "close_above_ema_slow_len"  : CategoricalParameter(["15","50","200"], default="200", space='buy', optimize=False, load=True),
-            "sma200_rising"             : CategoricalParameter([True, False], default=False, space='buy', optimize=False, load=True),
-            "sma200_rising_val"         : CategoricalParameter(["20","30","36","44","50"], default="30", space='buy', optimize=False, load=True),
-            "sma200_1h_rising"          : CategoricalParameter([True, False], default=False, space='buy', optimize=False, load=True),
-            "sma200_1h_rising_val"      : CategoricalParameter(["20","30","36","44","50"], default="50", space='buy', optimize=False, load=True),
-            "safe_dips"                 : CategoricalParameter([True, False], default=False, space='buy', optimize=False, load=True),
-            "safe_dips_type"            : CategoricalParameter(["10","50","100"], default="50", space='buy', optimize=False, load=True),
-            "safe_pump"                 : CategoricalParameter([True, False], default=True, space='buy', optimize=False, load=True),
-            "safe_pump_type"            : CategoricalParameter(["10","50","100"], default="110", space='buy', optimize=False, load=True),
-            "safe_pump_period"          : CategoricalParameter(["24","36","48"], default="36", space='buy', optimize=False, load=True),
-            "btc_1h_not_downtrend"      : CategoricalParameter([True, False], default=True, space='buy', optimize=False, load=True)
+            "ema_fast"                  : False,
+            "ema_fast_len"              : "50",
+            "ema_slow"                  : False,
+            "ema_slow_len"              : "100",
+            "close_above_ema_fast"      : False,
+            "close_above_ema_fast_len"  : "50",
+            "close_above_ema_slow"      : False,
+            "close_above_ema_slow_len"  : "200",
+            "sma200_rising"             : False,
+            "sma200_rising_val"         : "30",
+            "sma200_1h_rising"          : False,
+            "sma200_1h_rising_val"      : "50",
+            "safe_dips"                 : False,
+            "safe_dips_type"            : "50",
+            "safe_pump"                 : True,
+            "safe_pump_type"            : "110",
+            "safe_pump_period"          : "36",
+            "btc_1h_not_downtrend"      : True
         },
         29: {
-            "enable"                    : CategoricalParameter([True, False], default=True, space='buy', optimize=False, load=True),
-            "ema_fast"                  : CategoricalParameter([True, False], default=False, space='buy', optimize=False, load=True),
-            "ema_fast_len"              : CategoricalParameter(["26","50","100","200"], default="50", space='buy', optimize=False, load=True),
-            "ema_slow"                  : CategoricalParameter([True, False], default=False, space='buy', optimize=False, load=True),
-            "ema_slow_len"              : CategoricalParameter(["26","50","100","200"], default="100", space='buy', optimize=False, load=True),
-            "close_above_ema_fast"      : CategoricalParameter([True, False], default=False, space='buy', optimize=False, load=True),
-            "close_above_ema_fast_len"  : CategoricalParameter(["12","20","26","50","100","200"], default="50", space='buy', optimize=False, load=True),
-            "close_above_ema_slow"      : CategoricalParameter([True, False], default=False, space='buy', optimize=False, load=True),
-            "close_above_ema_slow_len"  : CategoricalParameter(["15","50","200"], default="200", space='buy', optimize=False, load=True),
-            "sma200_rising"             : CategoricalParameter([True, False], default=False, space='buy', optimize=False, load=True),
-            "sma200_rising_val"         : CategoricalParameter(["20","30","36","44","50"], default="30", space='buy', optimize=False, load=True),
-            "sma200_1h_rising"          : CategoricalParameter([True, False], default=False, space='buy', optimize=False, load=True),
-            "sma200_1h_rising_val"      : CategoricalParameter(["20","30","36","44","50"], default="50", space='buy', optimize=False, load=True),
-            "safe_dips"                 : CategoricalParameter([True, False], default=False, space='buy', optimize=False, load=True),
-            "safe_dips_type"            : CategoricalParameter(["10","50","100"], default="50", space='buy', optimize=False, load=True),
-            "safe_pump"                 : CategoricalParameter([True, False], default=False, space='buy', optimize=False, load=True),
-            "safe_pump_type"            : CategoricalParameter(["10","50","100"], default="110", space='buy', optimize=False, load=True),
-            "safe_pump_period"          : CategoricalParameter(["24","36","48"], default="36", space='buy', optimize=False, load=True),
-            "btc_1h_not_downtrend"      : CategoricalParameter([True, False], default=False, space='buy', optimize=False, load=True)
+            "ema_fast"                  : False,
+            "ema_fast_len"              : "50",
+            "ema_slow"                  : False,
+            "ema_slow_len"              : "100",
+            "close_above_ema_fast"      : False,
+            "close_above_ema_fast_len"  : "50",
+            "close_above_ema_slow"      : False,
+            "close_above_ema_slow_len"  : "200",
+            "sma200_rising"             : False,
+            "sma200_rising_val"         : "30",
+            "sma200_1h_rising"          : False,
+            "sma200_1h_rising_val"      : "50",
+            "safe_dips"                 : False,
+            "safe_dips_type"            : "50",
+            "safe_pump"                 : False,
+            "safe_pump_type"            : "110",
+            "safe_pump_period"          : "36",
+            "btc_1h_not_downtrend"      : False
         },
         30: {
-            "enable"                    : CategoricalParameter([True, False], default=True, space='buy', optimize=False, load=True),
-            "ema_fast"                  : CategoricalParameter([True, False], default=False, space='buy', optimize=False, load=True),
-            "ema_fast_len"              : CategoricalParameter(["26","50","100","200"], default="50", space='buy', optimize=False, load=True),
-            "ema_slow"                  : CategoricalParameter([True, False], default=True, space='buy', optimize=False, load=True),
-            "ema_slow_len"              : CategoricalParameter(["26","50","100","200"], default="100", space='buy', optimize=False, load=True),
-            "close_above_ema_fast"      : CategoricalParameter([True, False], default=False, space='buy', optimize=False, load=True),
-            "close_above_ema_fast_len"  : CategoricalParameter(["12","20","26","50","100","200"], default="50", space='buy', optimize=False, load=True),
-            "close_above_ema_slow"      : CategoricalParameter([True, False], default=False, space='buy', optimize=False, load=True),
-            "close_above_ema_slow_len"  : CategoricalParameter(["15","50","200"], default="200", space='buy', optimize=False, load=True),
-            "sma200_rising"             : CategoricalParameter([True, False], default=False, space='buy', optimize=False, load=True),
-            "sma200_rising_val"         : CategoricalParameter(["20","30","36","44","50"], default="30", space='buy', optimize=False, load=True),
-            "sma200_1h_rising"          : CategoricalParameter([True, False], default=False, space='buy', optimize=False, load=True),
-            "sma200_1h_rising_val"      : CategoricalParameter(["20","30","36","44","50"], default="50", space='buy', optimize=False, load=True),
-            "safe_dips"                 : CategoricalParameter([True, False], default=False, space='buy', optimize=False, load=True),
-            "safe_dips_type"            : CategoricalParameter(["10","50","100"], default="50", space='buy', optimize=False, load=True),
-            "safe_pump"                 : CategoricalParameter([True, False], default=False, space='buy', optimize=False, load=True),
-            "safe_pump_type"            : CategoricalParameter(["10","50","100"], default="110", space='buy', optimize=False, load=True),
-            "safe_pump_period"          : CategoricalParameter(["24","36","48"], default="36", space='buy', optimize=False, load=True),
-            "btc_1h_not_downtrend"      : CategoricalParameter([True, False], default=False, space='buy', optimize=False, load=True)
+            "ema_fast"                  : False,
+            "ema_fast_len"              : "50",
+            "ema_slow"                  : True,
+            "ema_slow_len"              : "100",
+            "close_above_ema_fast"      : False,
+            "close_above_ema_fast_len"  : "50",
+            "close_above_ema_slow"      : False,
+            "close_above_ema_slow_len"  : "200",
+            "sma200_rising"             : False,
+            "sma200_rising_val"         : "30",
+            "sma200_1h_rising"          : False,
+            "sma200_1h_rising_val"      : "50",
+            "safe_dips"                 : False,
+            "safe_dips_type"            : "50",
+            "safe_pump"                 : False,
+            "safe_pump_type"            : "110",
+            "safe_pump_period"          : "36",
+            "btc_1h_not_downtrend"      : False
         },
         31: {
-            "enable"                    : CategoricalParameter([True, False], default=True, space='buy', optimize=False, load=True),
-            "ema_fast"                  : CategoricalParameter([True, False], default=False, space='buy', optimize=False, load=True),
-            "ema_fast_len"              : CategoricalParameter(["26","50","100","200"], default="50", space='buy', optimize=False, load=True),
-            "ema_slow"                  : CategoricalParameter([True, False], default=False, space='buy', optimize=False, load=True),
-            "ema_slow_len"              : CategoricalParameter(["26","50","100","200"], default="100", space='buy', optimize=False, load=True),
-            "close_above_ema_fast"      : CategoricalParameter([True, False], default=False, space='buy', optimize=False, load=True),
-            "close_above_ema_fast_len"  : CategoricalParameter(["12","20","26","50","100","200"], default="50", space='buy', optimize=False, load=True),
-            "close_above_ema_slow"      : CategoricalParameter([True, False], default=False, space='buy', optimize=False, load=True),
-            "close_above_ema_slow_len"  : CategoricalParameter(["15","50","200"], default="100", space='buy', optimize=False, load=True),
-            "sma200_rising"             : CategoricalParameter([True, False], default=False, space='buy', optimize=False, load=True),
-            "sma200_rising_val"         : CategoricalParameter(["20","30","36","44","50"], default="30", space='buy', optimize=False, load=True),
-            "sma200_1h_rising"          : CategoricalParameter([True, False], default=False, space='buy', optimize=False, load=True),
-            "sma200_1h_rising_val"      : CategoricalParameter(["20","30","36","44","50"], default="50", space='buy', optimize=False, load=True),
-            "safe_dips"                 : CategoricalParameter([True, False], default=False, space='buy', optimize=False, load=True),
-            "safe_dips_type"            : CategoricalParameter(["10","50","100"], default="110", space='buy', optimize=False, load=True),
-            "safe_pump"                 : CategoricalParameter([True, False], default=False, space='buy', optimize=False, load=True),
-            "safe_pump_type"            : CategoricalParameter(["10","50","100"], default="10", space='buy', optimize=False, load=True),
-            "safe_pump_period"          : CategoricalParameter(["24","36","48"], default="48", space='buy', optimize=False, load=True),
-            "btc_1h_not_downtrend"      : CategoricalParameter([True, False], default=False, space='buy', optimize=False, load=True)
+            "ema_fast"                  : False,
+            "ema_fast_len"              : "50",
+            "ema_slow"                  : False,
+            "ema_slow_len"              : "100",
+            "close_above_ema_fast"      : False,
+            "close_above_ema_fast_len"  : "50",
+            "close_above_ema_slow"      : False,
+            "close_above_ema_slow_len"  : "100",
+            "sma200_rising"             : False,
+            "sma200_rising_val"         : "30",
+            "sma200_1h_rising"          : False,
+            "sma200_1h_rising_val"      : "50",
+            "safe_dips"                 : True,
+            "safe_dips_type"            : "50",
+            "safe_pump"                 : False,
+            "safe_pump_type"            : "10",
+            "safe_pump_period"          : "48",
+            "btc_1h_not_downtrend"      : False
         },
         32: {
-            "enable"                    : CategoricalParameter([True, False], default=True, space='buy', optimize=False, load=True),
-            "ema_fast"                  : CategoricalParameter([True, False], default=False, space='buy', optimize=False, load=True),
-            "ema_fast_len"              : CategoricalParameter(["26","50","100","200"], default="50", space='buy', optimize=False, load=True),
-            "ema_slow"                  : CategoricalParameter([True, False], default=False, space='buy', optimize=False, load=True),
-            "ema_slow_len"              : CategoricalParameter(["26","50","100","200"], default="100", space='buy', optimize=False, load=True),
-            "close_above_ema_fast"      : CategoricalParameter([True, False], default=False, space='buy', optimize=False, load=True),
-            "close_above_ema_fast_len"  : CategoricalParameter(["12","20","26","50","100","200"], default="50", space='buy', optimize=False, load=True),
-            "close_above_ema_slow"      : CategoricalParameter([True, False], default=False, space='buy', optimize=False, load=True),
-            "close_above_ema_slow_len"  : CategoricalParameter(["15","50","200"], default="100", space='buy', optimize=False, load=True),
-            "sma200_rising"             : CategoricalParameter([True, False], default=False, space='buy', optimize=False, load=True),
-            "sma200_rising_val"         : CategoricalParameter(["20","30","36","44","50"], default="30", space='buy', optimize=False, load=True),
-            "sma200_1h_rising"          : CategoricalParameter([True, False], default=False, space='buy', optimize=False, load=True),
-            "sma200_1h_rising_val"      : CategoricalParameter(["20","30","36","44","50"], default="50", space='buy', optimize=False, load=True),
-            "safe_dips"                 : CategoricalParameter([True, False], default=True, space='buy', optimize=False, load=True),
-            "safe_dips_type"            : CategoricalParameter(["10","50","100"], default="10", space='buy', optimize=False, load=True),
-            "safe_pump"                 : CategoricalParameter([True, False], default=True, space='buy', optimize=False, load=True),
-            "safe_pump_type"            : CategoricalParameter(["10","50","100"], default="20", space='buy', optimize=False, load=True),
-            "safe_pump_period"          : CategoricalParameter(["24","36","48"], default="48", space='buy', optimize=False, load=True),
-            "btc_1h_not_downtrend"      : CategoricalParameter([True, False], default=False, space='buy', optimize=False, load=True)
+            "ema_fast"                  : False,
+            "ema_fast_len"              : "50",
+            "ema_slow"                  : True,
+            "ema_slow_len"              : "12",
+            "close_above_ema_fast"      : False,
+            "close_above_ema_fast_len"  : "50",
+            "close_above_ema_slow"      : False,
+            "close_above_ema_slow_len"  : "100",
+            "sma200_rising"             : False,
+            "sma200_rising_val"         : "30",
+            "sma200_1h_rising"          : True,
+            "sma200_1h_rising_val"      : "50",
+            "safe_dips"                 : True,
+            "safe_dips_type"            : "120",
+            "safe_pump"                 : True,
+            "safe_pump_type"            : "120",
+            "safe_pump_period"          : "48",
+            "btc_1h_not_downtrend"      : False
         },
         33: {
-            "enable"                    : CategoricalParameter([True, False], default=True, space='buy', optimize=False, load=True),
-            "ema_fast"                  : CategoricalParameter([True, False], default=False, space='buy', optimize=False, load=True),
-            "ema_fast_len"              : CategoricalParameter(["26","50","100","200"], default="50", space='buy', optimize=False, load=True),
-            "ema_slow"                  : CategoricalParameter([True, False], default=True, space='buy', optimize=False, load=True),
-            "ema_slow_len"              : CategoricalParameter(["26","50","100","200"], default="50", space='buy', optimize=False, load=True),
-            "close_above_ema_fast"      : CategoricalParameter([True, False], default=False, space='buy', optimize=False, load=True),
-            "close_above_ema_fast_len"  : CategoricalParameter(["12","20","26","50","100","200"], default="50", space='buy', optimize=False, load=True),
-            "close_above_ema_slow"      : CategoricalParameter([True, False], default=False, space='buy', optimize=False, load=True),
-            "close_above_ema_slow_len"  : CategoricalParameter(["15","50","200"], default="100", space='buy', optimize=False, load=True),
-            "sma200_rising"             : CategoricalParameter([True, False], default=False, space='buy', optimize=False, load=True),
-            "sma200_rising_val"         : CategoricalParameter(["20","30","36","44","50"], default="30", space='buy', optimize=False, load=True),
-            "sma200_1h_rising"          : CategoricalParameter([True, False], default=False, space='buy', optimize=False, load=True),
-            "sma200_1h_rising_val"      : CategoricalParameter(["20","30","36","44","50"], default="50", space='buy', optimize=False, load=True),
-            "safe_dips"                 : CategoricalParameter([True, False], default=True, space='buy', optimize=False, load=True),
-            "safe_dips_type"            : CategoricalParameter(["10","50","100"], default="100", space='buy', optimize=False, load=True),
-            "safe_pump"                 : CategoricalParameter([True, False], default=False, space='buy', optimize=False, load=True),
-            "safe_pump_type"            : CategoricalParameter(["10","50","100"], default="100", space='buy', optimize=False, load=True),
-            "safe_pump_period"          : CategoricalParameter(["24","36","48"], default="24", space='buy', optimize=False, load=True),
-            "btc_1h_not_downtrend"      : CategoricalParameter([True, False], default=False, space='buy', optimize=False, load=True)
+            "ema_fast"                  : False,
+            "ema_fast_len"              : "50",
+            "ema_slow"                  : True,
+            "ema_slow_len"              : "50",
+            "close_above_ema_fast"      : False,
+            "close_above_ema_fast_len"  : "50",
+            "close_above_ema_slow"      : False,
+            "close_above_ema_slow_len"  : "100",
+            "sma200_rising"             : False,
+            "sma200_rising_val"         : "30",
+            "sma200_1h_rising"          : False,
+            "sma200_1h_rising_val"      : "50",
+            "safe_dips"                 : True,
+            "safe_dips_type"            : "100",
+            "safe_pump"                 : True,
+            "safe_pump_type"            : "10",
+            "safe_pump_period"          : "24",
+            "btc_1h_not_downtrend"      : False
         },
         34: {
-            "enable"                    : CategoricalParameter([True, False], default=True, space='buy', optimize=False, load=True),
-            "ema_fast"                  : CategoricalParameter([True, False], default=False, space='buy', optimize=False, load=True),
-            "ema_fast_len"              : CategoricalParameter(["26","50","100","200"], default="50", space='buy', optimize=False, load=True),
-            "ema_slow"                  : CategoricalParameter([True, False], default=False, space='buy', optimize=False, load=True),
-            "ema_slow_len"              : CategoricalParameter(["26","50","100","200"], default="100", space='buy', optimize=False, load=True),
-            "close_above_ema_fast"      : CategoricalParameter([True, False], default=False, space='buy', optimize=False, load=True),
-            "close_above_ema_fast_len"  : CategoricalParameter(["12","20","26","50","100","200"], default="50", space='buy', optimize=False, load=True),
-            "close_above_ema_slow"      : CategoricalParameter([True, False], default=False, space='buy', optimize=False, load=True),
-            "close_above_ema_slow_len"  : CategoricalParameter(["15","50","200"], default="100", space='buy', optimize=False, load=True),
-            "sma200_rising"             : CategoricalParameter([True, False], default=False, space='buy', optimize=False, load=True),
-            "sma200_rising_val"         : CategoricalParameter(["20","30","36","44","50"], default="30", space='buy', optimize=False, load=True),
-            "sma200_1h_rising"          : CategoricalParameter([True, False], default=False, space='buy', optimize=False, load=True),
-            "sma200_1h_rising_val"      : CategoricalParameter(["20","30","36","44","50"], default="50", space='buy', optimize=False, load=True),
-            "safe_dips"                 : CategoricalParameter([True, False], default=False, space='buy', optimize=False, load=True),
-            "safe_dips_type"            : CategoricalParameter(["10","50","100"], default="100", space='buy', optimize=False, load=True),
-            "safe_pump"                 : CategoricalParameter([True, False], default=False, space='buy', optimize=False, load=True),
-            "safe_pump_type"            : CategoricalParameter(["10","50","100"], default="10", space='buy', optimize=False, load=True),
-            "safe_pump_period"          : CategoricalParameter(["24","36","48"], default="24", space='buy', optimize=False, load=True),
-            "btc_1h_not_downtrend"      : CategoricalParameter([True, False], default=False, space='buy', optimize=False, load=True)
+            "ema_fast"                  : False,
+            "ema_fast_len"              : "50",
+            "ema_slow"                  : False,
+            "ema_slow_len"              : "100",
+            "close_above_ema_fast"      : False,
+            "close_above_ema_fast_len"  : "50",
+            "close_above_ema_slow"      : False,
+            "close_above_ema_slow_len"  : "100",
+            "sma200_rising"             : False,
+            "sma200_rising_val"         : "30",
+            "sma200_1h_rising"          : False,
+            "sma200_1h_rising_val"      : "50",
+            "safe_dips"                 : False,
+            "safe_dips_type"            : "100",
+            "safe_pump"                 : False,
+            "safe_pump_type"            : "10",
+            "safe_pump_period"          : "24",
+            "btc_1h_not_downtrend"      : False
+        },
+        35: {
+            "ema_fast"                  : False,
+            "ema_fast_len"              : "50",
+            "ema_slow"                  : False,
+            "ema_slow_len"              : "100",
+            "close_above_ema_fast"      : False,
+            "close_above_ema_fast_len"  : "50",
+            "close_above_ema_slow"      : False,
+            "close_above_ema_slow_len"  : "100",
+            "sma200_rising"             : False,
+            "sma200_rising_val"         : "30",
+            "sma200_1h_rising"          : False,
+            "sma200_1h_rising_val"      : "50",
+            "safe_dips"                 : False,
+            "safe_dips_type"            : "100",
+            "safe_pump"                 : False,
+            "safe_pump_type"            : "10",
+            "safe_pump_period"          : "24",
+            "btc_1h_not_downtrend"      : False
+        },
+        36: {
+            "ema_fast"                  : False,
+            "ema_fast_len"              : "50",
+            "ema_slow"                  : False,
+            "ema_slow_len"              : "100",
+            "close_above_ema_fast"      : False,
+            "close_above_ema_fast_len"  : "50",
+            "close_above_ema_slow"      : False,
+            "close_above_ema_slow_len"  : "100",
+            "sma200_rising"             : False,
+            "sma200_rising_val"         : "30",
+            "sma200_1h_rising"          : False,
+            "sma200_1h_rising_val"      : "50",
+            "safe_dips"                 : False,
+            "safe_dips_type"            : "100",
+            "safe_pump"                 : False,
+            "safe_pump_type"            : "10",
+            "safe_pump_period"          : "24",
+            "btc_1h_not_downtrend"      : False
+        },
+        37: {
+            "ema_fast"                  : False,
+            "ema_fast_len"              : "50",
+            "ema_slow"                  : False,
+            "ema_slow_len"              : "100",
+            "close_above_ema_fast"      : False,
+            "close_above_ema_fast_len"  : "200",
+            "close_above_ema_slow"      : False,
+            "close_above_ema_slow_len"  : "100",
+            "sma200_rising"             : False,
+            "sma200_rising_val"         : "30",
+            "sma200_1h_rising"          : False,
+            "sma200_1h_rising_val"      : "50",
+            "safe_dips"                 : False,
+            "safe_dips_type"            : "100",
+            "safe_pump"                 : False,
+            "safe_pump_type"            : "100",
+            "safe_pump_period"          : "48",
+            "btc_1h_not_downtrend"      : False
+        },
+        38: {
+            "ema_fast"                  : False,
+            "ema_fast_len"              : "50",
+            "ema_slow"                  : False,
+            "ema_slow_len"              : "100",
+            "close_above_ema_fast"      : False,
+            "close_above_ema_fast_len"  : "50",
+            "close_above_ema_slow"      : False,
+            "close_above_ema_slow_len"  : "100",
+            "sma200_rising"             : False,
+            "sma200_rising_val"         : "30",
+            "sma200_1h_rising"          : False,
+            "sma200_1h_rising_val"      : "50",
+            "safe_dips"                 : True,
+            "safe_dips_type"            : "130",
+            "safe_pump"                 : False,
+            "safe_pump_type"            : "10",
+            "safe_pump_period"          : "36",
+            "btc_1h_not_downtrend"      : True
+        },
+        39: {
+            "ema_fast"                  : False,
+            "ema_fast_len"              : "100",
+            "ema_slow"                  : True,
+            "ema_slow_len"              : "15",
+            "close_above_ema_fast"      : True,
+            "close_above_ema_fast_len"  : "100",
+            "close_above_ema_slow"      : True,
+            "close_above_ema_slow_len"  : "200",
+            "sma200_rising"             : False,
+            "sma200_rising_val"         : "30",
+            "sma200_1h_rising"          : False,
+            "sma200_1h_rising_val"      : "20",
+            "safe_dips"                 : False,
+            "safe_dips_type"            : "100",
+            "safe_pump"                 : False,
+            "safe_pump_type"            : "50",
+            "safe_pump_period"          : "48",
+            "btc_1h_not_downtrend"      : True
+        },
+        40: {
+            "ema_fast"                  : True,
+            "ema_fast_len"              : "12",
+            "ema_slow"                  : True,
+            "ema_slow_len"              : "25",
+            "close_above_ema_fast"      : False,
+            "close_above_ema_fast_len"  : "200",
+            "close_above_ema_slow"      : True,
+            "close_above_ema_slow_len"  : "200",
+            "sma200_rising"             : False,
+            "sma200_rising_val"         : "30",
+            "sma200_1h_rising"          : False,
+            "sma200_1h_rising_val"      : "20",
+            "safe_dips"                 : False,
+            "safe_dips_type"            : "130",
+            "safe_pump"                 : False,
+            "safe_pump_type"            : "50",
+            "safe_pump_period"          : "48",
+            "btc_1h_not_downtrend"      : True
+        },
+        41: {
+            "ema_fast"                  : False,
+            "ema_fast_len"              : "12",
+            "ema_slow"                  : False,
+            "ema_slow_len"              : "12",
+            "close_above_ema_fast"      : False,
+            "close_above_ema_fast_len"  : "200",
+            "close_above_ema_slow"      : False,
+            "close_above_ema_slow_len"  : "200",
+            "sma200_rising"             : False,
+            "sma200_rising_val"         : "30",
+            "sma200_1h_rising"          : False,
+            "sma200_1h_rising_val"      : "20",
+            "safe_dips"                 : True,
+            "safe_dips_type"            : "50",
+            "safe_pump"                 : False,
+            "safe_pump_type"            : "120",
+            "safe_pump_period"          : "24",
+            "btc_1h_not_downtrend"      : True
+        },
+        42: {
+            "ema_fast"                  : False,
+            "ema_fast_len"              : "12",
+            "ema_slow"                  : False,
+            "ema_slow_len"              : "12",
+            "close_above_ema_fast"      : False,
+            "close_above_ema_fast_len"  : "200",
+            "close_above_ema_slow"      : False,
+            "close_above_ema_slow_len"  : "200",
+            "sma200_rising"             : False,
+            "sma200_rising_val"         : "30",
+            "sma200_1h_rising"          : False,
+            "sma200_1h_rising_val"      : "20",
+            "safe_dips"                 : True,
+            "safe_dips_type"            : "110",
+            "safe_pump"                 : False,
+            "safe_pump_type"            : "100",
+            "safe_pump_period"          : "24",
+            "btc_1h_not_downtrend"      : True
+        },
+        43: {
+            "ema_fast"                  : False,
+            "ema_fast_len"              : "12",
+            "ema_slow"                  : False,
+            "ema_slow_len"              : "12",
+            "close_above_ema_fast"      : False,
+            "close_above_ema_fast_len"  : "200",
+            "close_above_ema_slow"      : False,
+            "close_above_ema_slow_len"  : "200",
+            "sma200_rising"             : False,
+            "sma200_rising_val"         : "30",
+            "sma200_1h_rising"          : False,
+            "sma200_1h_rising_val"      : "20",
+            "safe_dips"                 : True,
+            "safe_dips_type"            : "70",
+            "safe_pump"                 : False,
+            "safe_pump_type"            : "100",
+            "safe_pump_period"          : "24",
+            "btc_1h_not_downtrend"      : True
+        },
+        44: {
+            "ema_fast"                  : False,
+            "ema_fast_len"              : "12",
+            "ema_slow"                  : False,
+            "ema_slow_len"              : "12",
+            "close_above_ema_fast"      : False,
+            "close_above_ema_fast_len"  : "200",
+            "close_above_ema_slow"      : False,
+            "close_above_ema_slow_len"  : "200",
+            "sma200_rising"             : False,
+            "sma200_rising_val"         : "30",
+            "sma200_1h_rising"          : False,
+            "sma200_1h_rising_val"      : "20",
+            "safe_dips"                 : False,
+            "safe_dips_type"            : "100",
+            "safe_pump"                 : False,
+            "safe_pump_type"            : "100",
+            "safe_pump_period"          : "24",
+            "btc_1h_not_downtrend"      : False
         }
     }
 
-    buy_condition_1_enable = buy_protection_params[1]["enable"]
-    buy_1_protection__ema_fast                 = buy_protection_params[1]["ema_fast"]
-    buy_1_protection__ema_fast_len             = buy_protection_params[1]["ema_fast_len"]
-    buy_1_protection__ema_slow                 = buy_protection_params[1]["ema_slow"]
-    buy_1_protection__ema_slow_len             = buy_protection_params[1]["ema_slow_len"]
-    buy_1_protection__close_above_ema_fast     = buy_protection_params[1]["close_above_ema_fast"]
-    buy_1_protection__close_above_ema_fast_len = buy_protection_params[1]["close_above_ema_fast_len"]
-    buy_1_protection__close_above_ema_slow     = buy_protection_params[1]["close_above_ema_slow"]
-    buy_1_protection__close_above_ema_slow_len = buy_protection_params[1]["close_above_ema_slow_len"]
-    buy_1_protection__sma200_rising            = buy_protection_params[1]["sma200_rising"]
-    buy_1_protection__sma200_rising_val        = buy_protection_params[1]["sma200_rising_val"]
-    buy_1_protection__sma200_1h_rising         = buy_protection_params[1]["sma200_1h_rising"]
-    buy_1_protection__sma200_1h_rising_val     = buy_protection_params[1]["sma200_1h_rising_val"]
-    buy_1_protection__safe_dips                = buy_protection_params[1]["safe_dips"]
-    buy_1_protection__safe_dips_type           = buy_protection_params[1]["safe_dips_type"]
-    buy_1_protection__safe_pump                = buy_protection_params[1]["safe_pump"]
-    buy_1_protection__safe_pump_type           = buy_protection_params[1]["safe_pump_type"]
-    buy_1_protection__safe_pump_period         = buy_protection_params[1]["safe_pump_period"]
-    buy_1_protection__btc_1h_not_downtrend     = buy_protection_params[1]["btc_1h_not_downtrend"]
-
-    buy_condition_2_enable = buy_protection_params[2]["enable"]
-    buy_2_protection__ema_fast                 = buy_protection_params[2]["ema_fast"]
-    buy_2_protection__ema_fast_len             = buy_protection_params[2]["ema_fast_len"]
-    buy_2_protection__ema_slow                 = buy_protection_params[2]["ema_slow"]
-    buy_2_protection__ema_slow_len             = buy_protection_params[2]["ema_slow_len"]
-    buy_2_protection__close_above_ema_fast     = buy_protection_params[2]["close_above_ema_fast"]
-    buy_2_protection__close_above_ema_fast_len = buy_protection_params[2]["close_above_ema_fast_len"]
-    buy_2_protection__close_above_ema_slow     = buy_protection_params[2]["close_above_ema_slow"]
-    buy_2_protection__close_above_ema_slow_len = buy_protection_params[2]["close_above_ema_slow_len"]
-    buy_2_protection__sma200_rising            = buy_protection_params[2]["sma200_rising"]
-    buy_2_protection__sma200_rising_val        = buy_protection_params[2]["sma200_rising_val"]
-    buy_2_protection__sma200_1h_rising         = buy_protection_params[2]["sma200_1h_rising"]
-    buy_2_protection__sma200_1h_rising_val     = buy_protection_params[2]["sma200_1h_rising_val"]
-    buy_2_protection__safe_dips                = buy_protection_params[2]["safe_dips"]
-    buy_2_protection__safe_dips_type           = buy_protection_params[2]["safe_dips_type"]
-    buy_2_protection__safe_pump                = buy_protection_params[2]["safe_pump"]
-    buy_2_protection__safe_pump_type           = buy_protection_params[2]["safe_pump_type"]
-    buy_2_protection__safe_pump_period         = buy_protection_params[2]["safe_pump_period"]
-    buy_2_protection__btc_1h_not_downtrend     = buy_protection_params[2]["btc_1h_not_downtrend"]
-
-    buy_condition_3_enable = buy_protection_params[3]["enable"]
-    buy_3_protection__ema_fast                 = buy_protection_params[3]["ema_fast"]
-    buy_3_protection__ema_fast_len             = buy_protection_params[3]["ema_fast_len"]
-    buy_3_protection__ema_slow                 = buy_protection_params[3]["ema_slow"]
-    buy_3_protection__ema_slow_len             = buy_protection_params[3]["ema_slow_len"]
-    buy_3_protection__close_above_ema_fast     = buy_protection_params[3]["close_above_ema_fast"]
-    buy_3_protection__close_above_ema_fast_len = buy_protection_params[3]["close_above_ema_fast_len"]
-    buy_3_protection__close_above_ema_slow     = buy_protection_params[3]["close_above_ema_slow"]
-    buy_3_protection__close_above_ema_slow_len = buy_protection_params[3]["close_above_ema_slow_len"]
-    buy_3_protection__sma200_rising            = buy_protection_params[3]["sma200_rising"]
-    buy_3_protection__sma200_rising_val        = buy_protection_params[3]["sma200_rising_val"]
-    buy_3_protection__sma200_1h_rising         = buy_protection_params[3]["sma200_1h_rising"]
-    buy_3_protection__sma200_1h_rising_val     = buy_protection_params[3]["sma200_1h_rising_val"]
-    buy_3_protection__safe_dips                = buy_protection_params[3]["safe_dips"]
-    buy_3_protection__safe_dips_type           = buy_protection_params[3]["safe_dips_type"]
-    buy_3_protection__safe_pump                = buy_protection_params[3]["safe_pump"]
-    buy_3_protection__safe_pump_type           = buy_protection_params[3]["safe_pump_type"]
-    buy_3_protection__safe_pump_period         = buy_protection_params[3]["safe_pump_period"]
-    buy_3_protection__btc_1h_not_downtrend     = buy_protection_params[3]["btc_1h_not_downtrend"]
-
-    buy_condition_4_enable = buy_protection_params[4]["enable"]
-    buy_4_protection__ema_fast                 = buy_protection_params[4]["ema_fast"]
-    buy_4_protection__ema_fast_len             = buy_protection_params[4]["ema_fast_len"]
-    buy_4_protection__ema_slow                 = buy_protection_params[4]["ema_slow"]
-    buy_4_protection__ema_slow_len             = buy_protection_params[4]["ema_slow_len"]
-    buy_4_protection__close_above_ema_fast     = buy_protection_params[4]["close_above_ema_fast"]
-    buy_4_protection__close_above_ema_fast_len = buy_protection_params[4]["close_above_ema_fast_len"]
-    buy_4_protection__close_above_ema_slow     = buy_protection_params[4]["close_above_ema_slow"]
-    buy_4_protection__close_above_ema_slow_len = buy_protection_params[4]["close_above_ema_slow_len"]
-    buy_4_protection__sma200_rising            = buy_protection_params[4]["sma200_rising"]
-    buy_4_protection__sma200_rising_val        = buy_protection_params[4]["sma200_rising_val"]
-    buy_4_protection__sma200_1h_rising         = buy_protection_params[4]["sma200_1h_rising"]
-    buy_4_protection__sma200_1h_rising_val     = buy_protection_params[4]["sma200_1h_rising_val"]
-    buy_4_protection__safe_dips                = buy_protection_params[4]["safe_dips"]
-    buy_4_protection__safe_dips_type           = buy_protection_params[4]["safe_dips_type"]
-    buy_4_protection__safe_pump                = buy_protection_params[4]["safe_pump"]
-    buy_4_protection__safe_pump_type           = buy_protection_params[4]["safe_pump_type"]
-    buy_4_protection__safe_pump_period         = buy_protection_params[4]["safe_pump_period"]
-    buy_4_protection__btc_1h_not_downtrend     = buy_protection_params[4]["btc_1h_not_downtrend"]
-
-    buy_condition_5_enable = buy_protection_params[5]["enable"]
-    buy_5_protection__ema_fast                 = buy_protection_params[5]["ema_fast"]
-    buy_5_protection__ema_fast_len             = buy_protection_params[5]["ema_fast_len"]
-    buy_5_protection__ema_slow                 = buy_protection_params[5]["ema_slow"]
-    buy_5_protection__ema_slow_len             = buy_protection_params[5]["ema_slow_len"]
-    buy_5_protection__close_above_ema_fast     = buy_protection_params[5]["close_above_ema_fast"]
-    buy_5_protection__close_above_ema_fast_len = buy_protection_params[5]["close_above_ema_fast_len"]
-    buy_5_protection__close_above_ema_slow     = buy_protection_params[5]["close_above_ema_slow"]
-    buy_5_protection__close_above_ema_slow_len = buy_protection_params[5]["close_above_ema_slow_len"]
-    buy_5_protection__sma200_rising            = buy_protection_params[5]["sma200_rising"]
-    buy_5_protection__sma200_rising_val        = buy_protection_params[5]["sma200_rising_val"]
-    buy_5_protection__sma200_1h_rising         = buy_protection_params[5]["sma200_1h_rising"]
-    buy_5_protection__sma200_1h_rising_val     = buy_protection_params[5]["sma200_1h_rising_val"]
-    buy_5_protection__safe_dips                = buy_protection_params[5]["safe_dips"]
-    buy_5_protection__safe_dips_type           = buy_protection_params[5]["safe_dips_type"]
-    buy_5_protection__safe_pump                = buy_protection_params[5]["safe_pump"]
-    buy_5_protection__safe_pump_type           = buy_protection_params[5]["safe_pump_type"]
-    buy_5_protection__safe_pump_period         = buy_protection_params[5]["safe_pump_period"]
-    buy_5_protection__btc_1h_not_downtrend     = buy_protection_params[5]["btc_1h_not_downtrend"]
-
-    buy_condition_6_enable = buy_protection_params[6]["enable"]
-    buy_6_protection__ema_fast                 = buy_protection_params[6]["ema_fast"]
-    buy_6_protection__ema_fast_len             = buy_protection_params[6]["ema_fast_len"]
-    buy_6_protection__ema_slow                 = buy_protection_params[6]["ema_slow"]
-    buy_6_protection__ema_slow_len             = buy_protection_params[6]["ema_slow_len"]
-    buy_6_protection__close_above_ema_fast     = buy_protection_params[6]["close_above_ema_fast"]
-    buy_6_protection__close_above_ema_fast_len = buy_protection_params[6]["close_above_ema_fast_len"]
-    buy_6_protection__close_above_ema_slow     = buy_protection_params[6]["close_above_ema_slow"]
-    buy_6_protection__close_above_ema_slow_len = buy_protection_params[6]["close_above_ema_slow_len"]
-    buy_6_protection__sma200_rising            = buy_protection_params[6]["sma200_rising"]
-    buy_6_protection__sma200_rising_val        = buy_protection_params[6]["sma200_rising_val"]
-    buy_6_protection__sma200_1h_rising         = buy_protection_params[6]["sma200_1h_rising"]
-    buy_6_protection__sma200_1h_rising_val     = buy_protection_params[6]["sma200_1h_rising_val"]
-    buy_6_protection__safe_dips                = buy_protection_params[6]["safe_dips"]
-    buy_6_protection__safe_dips_type           = buy_protection_params[6]["safe_dips_type"]
-    buy_6_protection__safe_pump                = buy_protection_params[6]["safe_pump"]
-    buy_6_protection__safe_pump_type           = buy_protection_params[6]["safe_pump_type"]
-    buy_6_protection__safe_pump_period         = buy_protection_params[6]["safe_pump_period"]
-    buy_6_protection__btc_1h_not_downtrend     = buy_protection_params[6]["btc_1h_not_downtrend"]
-
-    buy_condition_7_enable = buy_protection_params[7]["enable"]
-    buy_7_protection__ema_fast                 = buy_protection_params[7]["ema_fast"]
-    buy_7_protection__ema_fast_len             = buy_protection_params[7]["ema_fast_len"]
-    buy_7_protection__ema_slow                 = buy_protection_params[7]["ema_slow"]
-    buy_7_protection__ema_slow_len             = buy_protection_params[7]["ema_slow_len"]
-    buy_7_protection__close_above_ema_fast     = buy_protection_params[7]["close_above_ema_fast"]
-    buy_7_protection__close_above_ema_fast_len = buy_protection_params[7]["close_above_ema_fast_len"]
-    buy_7_protection__close_above_ema_slow     = buy_protection_params[7]["close_above_ema_slow"]
-    buy_7_protection__close_above_ema_slow_len = buy_protection_params[7]["close_above_ema_slow_len"]
-    buy_7_protection__sma200_rising            = buy_protection_params[7]["sma200_rising"]
-    buy_7_protection__sma200_rising_val        = buy_protection_params[7]["sma200_rising_val"]
-    buy_7_protection__sma200_1h_rising         = buy_protection_params[7]["sma200_1h_rising"]
-    buy_7_protection__sma200_1h_rising_val     = buy_protection_params[7]["sma200_1h_rising_val"]
-    buy_7_protection__safe_dips                = buy_protection_params[7]["safe_dips"]
-    buy_7_protection__safe_dips_type           = buy_protection_params[7]["safe_dips_type"]
-    buy_7_protection__safe_pump                = buy_protection_params[7]["safe_pump"]
-    buy_7_protection__safe_pump_type           = buy_protection_params[7]["safe_pump_type"]
-    buy_7_protection__safe_pump_period         = buy_protection_params[7]["safe_pump_period"]
-    buy_7_protection__btc_1h_not_downtrend     = buy_protection_params[7]["btc_1h_not_downtrend"]
-
-    buy_condition_8_enable = buy_protection_params[8]["enable"]
-    buy_8_protection__ema_fast                 = buy_protection_params[8]["ema_fast"]
-    buy_8_protection__ema_fast_len             = buy_protection_params[8]["ema_fast_len"]
-    buy_8_protection__ema_slow                 = buy_protection_params[8]["ema_slow"]
-    buy_8_protection__ema_slow_len             = buy_protection_params[8]["ema_slow_len"]
-    buy_8_protection__close_above_ema_fast     = buy_protection_params[8]["close_above_ema_fast"]
-    buy_8_protection__close_above_ema_fast_len = buy_protection_params[8]["close_above_ema_fast_len"]
-    buy_8_protection__close_above_ema_slow     = buy_protection_params[8]["close_above_ema_slow"]
-    buy_8_protection__close_above_ema_slow_len = buy_protection_params[8]["close_above_ema_slow_len"]
-    buy_8_protection__sma200_rising            = buy_protection_params[8]["sma200_rising"]
-    buy_8_protection__sma200_rising_val        = buy_protection_params[8]["sma200_rising_val"]
-    buy_8_protection__sma200_1h_rising         = buy_protection_params[8]["sma200_1h_rising"]
-    buy_8_protection__sma200_1h_rising_val     = buy_protection_params[8]["sma200_1h_rising_val"]
-    buy_8_protection__safe_dips                = buy_protection_params[8]["safe_dips"]
-    buy_8_protection__safe_dips_type           = buy_protection_params[8]["safe_dips_type"]
-    buy_8_protection__safe_pump                = buy_protection_params[8]["safe_pump"]
-    buy_8_protection__safe_pump_type           = buy_protection_params[8]["safe_pump_type"]
-    buy_8_protection__safe_pump_period         = buy_protection_params[8]["safe_pump_period"]
-    buy_8_protection__btc_1h_not_downtrend     = buy_protection_params[8]["btc_1h_not_downtrend"]
-
-    buy_condition_9_enable = buy_protection_params[9]["enable"]
-    buy_9_protection__ema_fast                 = buy_protection_params[9]["ema_fast"]
-    buy_9_protection__ema_fast_len             = buy_protection_params[9]["ema_fast_len"]
-    buy_9_protection__ema_slow                 = buy_protection_params[9]["ema_slow"]
-    buy_9_protection__ema_slow_len             = buy_protection_params[9]["ema_slow_len"]
-    buy_9_protection__close_above_ema_fast     = buy_protection_params[9]["close_above_ema_fast"]
-    buy_9_protection__close_above_ema_fast_len = buy_protection_params[9]["close_above_ema_fast_len"]
-    buy_9_protection__close_above_ema_slow     = buy_protection_params[9]["close_above_ema_slow"]
-    buy_9_protection__close_above_ema_slow_len = buy_protection_params[9]["close_above_ema_slow_len"]
-    buy_9_protection__sma200_rising            = buy_protection_params[9]["sma200_rising"]
-    buy_9_protection__sma200_rising_val        = buy_protection_params[9]["sma200_rising_val"]
-    buy_9_protection__sma200_1h_rising         = buy_protection_params[9]["sma200_1h_rising"]
-    buy_9_protection__sma200_1h_rising_val     = buy_protection_params[9]["sma200_1h_rising_val"]
-    buy_9_protection__safe_dips                = buy_protection_params[9]["safe_dips"]
-    buy_9_protection__safe_dips_type           = buy_protection_params[9]["safe_dips_type"]
-    buy_9_protection__safe_pump                = buy_protection_params[9]["safe_pump"]
-    buy_9_protection__safe_pump_type           = buy_protection_params[9]["safe_pump_type"]
-    buy_9_protection__safe_pump_period         = buy_protection_params[9]["safe_pump_period"]
-    buy_9_protection__btc_1h_not_downtrend     = buy_protection_params[9]["btc_1h_not_downtrend"]
-
-    buy_condition_10_enable = buy_protection_params[10]["enable"]
-    buy_10_protection__ema_fast                 = buy_protection_params[10]["ema_fast"]
-    buy_10_protection__ema_fast_len             = buy_protection_params[10]["ema_fast_len"]
-    buy_10_protection__ema_slow                 = buy_protection_params[10]["ema_slow"]
-    buy_10_protection__ema_slow_len             = buy_protection_params[10]["ema_slow_len"]
-    buy_10_protection__close_above_ema_fast     = buy_protection_params[10]["close_above_ema_fast"]
-    buy_10_protection__close_above_ema_fast_len = buy_protection_params[10]["close_above_ema_fast_len"]
-    buy_10_protection__close_above_ema_slow     = buy_protection_params[10]["close_above_ema_slow"]
-    buy_10_protection__close_above_ema_slow_len = buy_protection_params[10]["close_above_ema_slow_len"]
-    buy_10_protection__sma200_rising            = buy_protection_params[10]["sma200_rising"]
-    buy_10_protection__sma200_rising_val        = buy_protection_params[10]["sma200_rising_val"]
-    buy_10_protection__sma200_1h_rising         = buy_protection_params[10]["sma200_1h_rising"]
-    buy_10_protection__sma200_1h_rising_val     = buy_protection_params[10]["sma200_1h_rising_val"]
-    buy_10_protection__safe_dips                = buy_protection_params[10]["safe_dips"]
-    buy_10_protection__safe_dips_type           = buy_protection_params[10]["safe_dips_type"]
-    buy_10_protection__safe_pump                = buy_protection_params[10]["safe_pump"]
-    buy_10_protection__safe_pump_type           = buy_protection_params[10]["safe_pump_type"]
-    buy_10_protection__safe_pump_period         = buy_protection_params[10]["safe_pump_period"]
-    buy_10_protection__btc_1h_not_downtrend     = buy_protection_params[10]["btc_1h_not_downtrend"]
-
-    buy_condition_11_enable = buy_protection_params[11]["enable"]
-    buy_11_protection__ema_fast                 = buy_protection_params[11]["ema_fast"]
-    buy_11_protection__ema_fast_len             = buy_protection_params[11]["ema_fast_len"]
-    buy_11_protection__ema_slow                 = buy_protection_params[11]["ema_slow"]
-    buy_11_protection__ema_slow_len             = buy_protection_params[11]["ema_slow_len"]
-    buy_11_protection__close_above_ema_fast     = buy_protection_params[11]["close_above_ema_fast"]
-    buy_11_protection__close_above_ema_fast_len = buy_protection_params[11]["close_above_ema_fast_len"]
-    buy_11_protection__close_above_ema_slow     = buy_protection_params[11]["close_above_ema_slow"]
-    buy_11_protection__close_above_ema_slow_len = buy_protection_params[11]["close_above_ema_slow_len"]
-    buy_11_protection__sma200_rising            = buy_protection_params[11]["sma200_rising"]
-    buy_11_protection__sma200_rising_val        = buy_protection_params[11]["sma200_rising_val"]
-    buy_11_protection__sma200_1h_rising         = buy_protection_params[11]["sma200_1h_rising"]
-    buy_11_protection__sma200_1h_rising_val     = buy_protection_params[11]["sma200_1h_rising_val"]
-    buy_11_protection__safe_dips                = buy_protection_params[11]["safe_dips"]
-    buy_11_protection__safe_dips_type           = buy_protection_params[11]["safe_dips_type"]
-    buy_11_protection__safe_pump                = buy_protection_params[11]["safe_pump"]
-    buy_11_protection__safe_pump_type           = buy_protection_params[11]["safe_pump_type"]
-    buy_11_protection__safe_pump_period         = buy_protection_params[11]["safe_pump_period"]
-    buy_11_protection__btc_1h_not_downtrend     = buy_protection_params[11]["btc_1h_not_downtrend"]
-
-    buy_condition_12_enable = buy_protection_params[12]["enable"]
-    buy_12_protection__ema_fast                 = buy_protection_params[12]["ema_fast"]
-    buy_12_protection__ema_fast_len             = buy_protection_params[12]["ema_fast_len"]
-    buy_12_protection__ema_slow                 = buy_protection_params[12]["ema_slow"]
-    buy_12_protection__ema_slow_len             = buy_protection_params[12]["ema_slow_len"]
-    buy_12_protection__close_above_ema_fast     = buy_protection_params[12]["close_above_ema_fast"]
-    buy_12_protection__close_above_ema_fast_len = buy_protection_params[12]["close_above_ema_fast_len"]
-    buy_12_protection__close_above_ema_slow     = buy_protection_params[12]["close_above_ema_slow"]
-    buy_12_protection__close_above_ema_slow_len = buy_protection_params[12]["close_above_ema_slow_len"]
-    buy_12_protection__sma200_rising            = buy_protection_params[12]["sma200_rising"]
-    buy_12_protection__sma200_rising_val        = buy_protection_params[12]["sma200_rising_val"]
-    buy_12_protection__sma200_1h_rising         = buy_protection_params[12]["sma200_1h_rising"]
-    buy_12_protection__sma200_1h_rising_val     = buy_protection_params[12]["sma200_1h_rising_val"]
-    buy_12_protection__safe_dips                = buy_protection_params[12]["safe_dips"]
-    buy_12_protection__safe_dips_type           = buy_protection_params[12]["safe_dips_type"]
-    buy_12_protection__safe_pump                = buy_protection_params[12]["safe_pump"]
-    buy_12_protection__safe_pump_type           = buy_protection_params[12]["safe_pump_type"]
-    buy_12_protection__safe_pump_period         = buy_protection_params[12]["safe_pump_period"]
-    buy_12_protection__btc_1h_not_downtrend     = buy_protection_params[12]["btc_1h_not_downtrend"]
-
-    buy_condition_13_enable = buy_protection_params[13]["enable"]
-    buy_13_protection__ema_fast                 = buy_protection_params[13]["ema_fast"]
-    buy_13_protection__ema_fast_len             = buy_protection_params[13]["ema_fast_len"]
-    buy_13_protection__ema_slow                 = buy_protection_params[13]["ema_slow"]
-    buy_13_protection__ema_slow_len             = buy_protection_params[13]["ema_slow_len"]
-    buy_13_protection__close_above_ema_fast     = buy_protection_params[13]["close_above_ema_fast"]
-    buy_13_protection__close_above_ema_fast_len = buy_protection_params[13]["close_above_ema_fast_len"]
-    buy_13_protection__close_above_ema_slow     = buy_protection_params[13]["close_above_ema_slow"]
-    buy_13_protection__close_above_ema_slow_len = buy_protection_params[13]["close_above_ema_slow_len"]
-    buy_13_protection__sma200_rising            = buy_protection_params[13]["sma200_rising"]
-    buy_13_protection__sma200_rising_val        = buy_protection_params[13]["sma200_rising_val"]
-    buy_13_protection__sma200_1h_rising         = buy_protection_params[13]["sma200_1h_rising"]
-    buy_13_protection__sma200_1h_rising_val     = buy_protection_params[13]["sma200_1h_rising_val"]
-    buy_13_protection__safe_dips                = buy_protection_params[13]["safe_dips"]
-    buy_13_protection__safe_dips_type           = buy_protection_params[13]["safe_dips_type"]
-    buy_13_protection__safe_pump                = buy_protection_params[13]["safe_pump"]
-    buy_13_protection__safe_pump_type           = buy_protection_params[13]["safe_pump_type"]
-    buy_13_protection__safe_pump_period         = buy_protection_params[13]["safe_pump_period"]
-    buy_13_protection__btc_1h_not_downtrend     = buy_protection_params[13]["btc_1h_not_downtrend"]
-
-    buy_condition_14_enable = buy_protection_params[14]["enable"]
-    buy_14_protection__ema_fast                 = buy_protection_params[14]["ema_fast"]
-    buy_14_protection__ema_fast_len             = buy_protection_params[14]["ema_fast_len"]
-    buy_14_protection__ema_slow                 = buy_protection_params[14]["ema_slow"]
-    buy_14_protection__ema_slow_len             = buy_protection_params[14]["ema_slow_len"]
-    buy_14_protection__close_above_ema_fast     = buy_protection_params[14]["close_above_ema_fast"]
-    buy_14_protection__close_above_ema_fast_len = buy_protection_params[14]["close_above_ema_fast_len"]
-    buy_14_protection__close_above_ema_slow     = buy_protection_params[14]["close_above_ema_slow"]
-    buy_14_protection__close_above_ema_slow_len = buy_protection_params[14]["close_above_ema_slow_len"]
-    buy_14_protection__sma200_rising            = buy_protection_params[14]["sma200_rising"]
-    buy_14_protection__sma200_rising_val        = buy_protection_params[14]["sma200_rising_val"]
-    buy_14_protection__sma200_1h_rising         = buy_protection_params[14]["sma200_1h_rising"]
-    buy_14_protection__sma200_1h_rising_val     = buy_protection_params[14]["sma200_1h_rising_val"]
-    buy_14_protection__safe_dips                = buy_protection_params[14]["safe_dips"]
-    buy_14_protection__safe_dips_type           = buy_protection_params[14]["safe_dips_type"]
-    buy_14_protection__safe_pump                = buy_protection_params[14]["safe_pump"]
-    buy_14_protection__safe_pump_type           = buy_protection_params[14]["safe_pump_type"]
-    buy_14_protection__safe_pump_period         = buy_protection_params[14]["safe_pump_period"]
-    buy_14_protection__btc_1h_not_downtrend     = buy_protection_params[14]["btc_1h_not_downtrend"]
-
-    buy_condition_15_enable = buy_protection_params[15]["enable"]
-    buy_15_protection__ema_fast                 = buy_protection_params[15]["ema_fast"]
-    buy_15_protection__ema_fast_len             = buy_protection_params[15]["ema_fast_len"]
-    buy_15_protection__ema_slow                 = buy_protection_params[15]["ema_slow"]
-    buy_15_protection__ema_slow_len             = buy_protection_params[15]["ema_slow_len"]
-    buy_15_protection__close_above_ema_fast     = buy_protection_params[15]["close_above_ema_fast"]
-    buy_15_protection__close_above_ema_fast_len = buy_protection_params[15]["close_above_ema_fast_len"]
-    buy_15_protection__close_above_ema_slow     = buy_protection_params[15]["close_above_ema_slow"]
-    buy_15_protection__close_above_ema_slow_len = buy_protection_params[15]["close_above_ema_slow_len"]
-    buy_15_protection__sma200_rising            = buy_protection_params[15]["sma200_rising"]
-    buy_15_protection__sma200_rising_val        = buy_protection_params[15]["sma200_rising_val"]
-    buy_15_protection__sma200_1h_rising         = buy_protection_params[15]["sma200_1h_rising"]
-    buy_15_protection__sma200_1h_rising_val     = buy_protection_params[15]["sma200_1h_rising_val"]
-    buy_15_protection__safe_dips                = buy_protection_params[15]["safe_dips"]
-    buy_15_protection__safe_dips_type           = buy_protection_params[15]["safe_dips_type"]
-    buy_15_protection__safe_pump                = buy_protection_params[15]["safe_pump"]
-    buy_15_protection__safe_pump_type           = buy_protection_params[15]["safe_pump_type"]
-    buy_15_protection__safe_pump_period         = buy_protection_params[15]["safe_pump_period"]
-    buy_15_protection__btc_1h_not_downtrend     = buy_protection_params[15]["btc_1h_not_downtrend"]
-
-    buy_condition_16_enable = buy_protection_params[16]["enable"]
-    buy_16_protection__ema_fast                 = buy_protection_params[16]["ema_fast"]
-    buy_16_protection__ema_fast_len             = buy_protection_params[16]["ema_fast_len"]
-    buy_16_protection__ema_slow                 = buy_protection_params[16]["ema_slow"]
-    buy_16_protection__ema_slow_len             = buy_protection_params[16]["ema_slow_len"]
-    buy_16_protection__close_above_ema_fast     = buy_protection_params[16]["close_above_ema_fast"]
-    buy_16_protection__close_above_ema_fast_len = buy_protection_params[16]["close_above_ema_fast_len"]
-    buy_16_protection__close_above_ema_slow     = buy_protection_params[16]["close_above_ema_slow"]
-    buy_16_protection__close_above_ema_slow_len = buy_protection_params[16]["close_above_ema_slow_len"]
-    buy_16_protection__sma200_rising            = buy_protection_params[16]["sma200_rising"]
-    buy_16_protection__sma200_rising_val        = buy_protection_params[16]["sma200_rising_val"]
-    buy_16_protection__sma200_1h_rising         = buy_protection_params[16]["sma200_1h_rising"]
-    buy_16_protection__sma200_1h_rising_val     = buy_protection_params[16]["sma200_1h_rising_val"]
-    buy_16_protection__safe_dips                = buy_protection_params[16]["safe_dips"]
-    buy_16_protection__safe_dips_type           = buy_protection_params[16]["safe_dips_type"]
-    buy_16_protection__safe_pump                = buy_protection_params[16]["safe_pump"]
-    buy_16_protection__safe_pump_type           = buy_protection_params[16]["safe_pump_type"]
-    buy_16_protection__safe_pump_period         = buy_protection_params[16]["safe_pump_period"]
-    buy_16_protection__btc_1h_not_downtrend     = buy_protection_params[16]["btc_1h_not_downtrend"]
-
-    buy_condition_17_enable = buy_protection_params[17]["enable"]
-    buy_17_protection__ema_fast                 = buy_protection_params[17]["ema_fast"]
-    buy_17_protection__ema_fast_len             = buy_protection_params[17]["ema_fast_len"]
-    buy_17_protection__ema_slow                 = buy_protection_params[17]["ema_slow"]
-    buy_17_protection__ema_slow_len             = buy_protection_params[17]["ema_slow_len"]
-    buy_17_protection__close_above_ema_fast     = buy_protection_params[17]["close_above_ema_fast"]
-    buy_17_protection__close_above_ema_fast_len = buy_protection_params[17]["close_above_ema_fast_len"]
-    buy_17_protection__close_above_ema_slow     = buy_protection_params[17]["close_above_ema_slow"]
-    buy_17_protection__close_above_ema_slow_len = buy_protection_params[17]["close_above_ema_slow_len"]
-    buy_17_protection__sma200_rising            = buy_protection_params[17]["sma200_rising"]
-    buy_17_protection__sma200_rising_val        = buy_protection_params[17]["sma200_rising_val"]
-    buy_17_protection__sma200_1h_rising         = buy_protection_params[17]["sma200_1h_rising"]
-    buy_17_protection__sma200_1h_rising_val     = buy_protection_params[17]["sma200_1h_rising_val"]
-    buy_17_protection__safe_dips                = buy_protection_params[17]["safe_dips"]
-    buy_17_protection__safe_dips_type           = buy_protection_params[17]["safe_dips_type"]
-    buy_17_protection__safe_pump                = buy_protection_params[17]["safe_pump"]
-    buy_17_protection__safe_pump_type           = buy_protection_params[17]["safe_pump_type"]
-    buy_17_protection__safe_pump_period         = buy_protection_params[17]["safe_pump_period"]
-    buy_17_protection__btc_1h_not_downtrend     = buy_protection_params[17]["btc_1h_not_downtrend"]
-
-    buy_condition_18_enable = buy_protection_params[18]["enable"]
-    buy_18_protection__ema_fast                 = buy_protection_params[18]["ema_fast"]
-    buy_18_protection__ema_fast_len             = buy_protection_params[18]["ema_fast_len"]
-    buy_18_protection__ema_slow                 = buy_protection_params[18]["ema_slow"]
-    buy_18_protection__ema_slow_len             = buy_protection_params[18]["ema_slow_len"]
-    buy_18_protection__close_above_ema_fast     = buy_protection_params[18]["close_above_ema_fast"]
-    buy_18_protection__close_above_ema_fast_len = buy_protection_params[18]["close_above_ema_fast_len"]
-    buy_18_protection__close_above_ema_slow     = buy_protection_params[18]["close_above_ema_slow"]
-    buy_18_protection__close_above_ema_slow_len = buy_protection_params[18]["close_above_ema_slow_len"]
-    buy_18_protection__sma200_rising            = buy_protection_params[18]["sma200_rising"]
-    buy_18_protection__sma200_rising_val        = buy_protection_params[18]["sma200_rising_val"]
-    buy_18_protection__sma200_1h_rising         = buy_protection_params[18]["sma200_1h_rising"]
-    buy_18_protection__sma200_1h_rising_val     = buy_protection_params[18]["sma200_1h_rising_val"]
-    buy_18_protection__safe_dips                = buy_protection_params[18]["safe_dips"]
-    buy_18_protection__safe_dips_type           = buy_protection_params[18]["safe_dips_type"]
-    buy_18_protection__safe_pump                = buy_protection_params[18]["safe_pump"]
-    buy_18_protection__safe_pump_type           = buy_protection_params[18]["safe_pump_type"]
-    buy_18_protection__safe_pump_period         = buy_protection_params[18]["safe_pump_period"]
-    buy_18_protection__btc_1h_not_downtrend     = buy_protection_params[18]["btc_1h_not_downtrend"]
-
-    buy_condition_19_enable = buy_protection_params[19]["enable"]
-    buy_19_protection__ema_fast                 = buy_protection_params[19]["ema_fast"]
-    buy_19_protection__ema_fast_len             = buy_protection_params[19]["ema_fast_len"]
-    buy_19_protection__ema_slow                 = buy_protection_params[19]["ema_slow"]
-    buy_19_protection__ema_slow_len             = buy_protection_params[19]["ema_slow_len"]
-    buy_19_protection__close_above_ema_fast     = buy_protection_params[19]["close_above_ema_fast"]
-    buy_19_protection__close_above_ema_fast_len = buy_protection_params[19]["close_above_ema_fast_len"]
-    buy_19_protection__close_above_ema_slow     = buy_protection_params[19]["close_above_ema_slow"]
-    buy_19_protection__close_above_ema_slow_len = buy_protection_params[19]["close_above_ema_slow_len"]
-    buy_19_protection__sma200_rising            = buy_protection_params[19]["sma200_rising"]
-    buy_19_protection__sma200_rising_val        = buy_protection_params[19]["sma200_rising_val"]
-    buy_19_protection__sma200_1h_rising         = buy_protection_params[19]["sma200_1h_rising"]
-    buy_19_protection__sma200_1h_rising_val     = buy_protection_params[19]["sma200_1h_rising_val"]
-    buy_19_protection__safe_dips                = buy_protection_params[19]["safe_dips"]
-    buy_19_protection__safe_dips_type           = buy_protection_params[19]["safe_dips_type"]
-    buy_19_protection__safe_pump                = buy_protection_params[19]["safe_pump"]
-    buy_19_protection__safe_pump_type           = buy_protection_params[19]["safe_pump_type"]
-    buy_19_protection__safe_pump_period         = buy_protection_params[19]["safe_pump_period"]
-    buy_19_protection__btc_1h_not_downtrend     = buy_protection_params[19]["btc_1h_not_downtrend"]
-
-    buy_condition_20_enable = buy_protection_params[20]["enable"]
-    buy_20_protection__ema_fast                 = buy_protection_params[20]["ema_fast"]
-    buy_20_protection__ema_fast_len             = buy_protection_params[20]["ema_fast_len"]
-    buy_20_protection__ema_slow                 = buy_protection_params[20]["ema_slow"]
-    buy_20_protection__ema_slow_len             = buy_protection_params[20]["ema_slow_len"]
-    buy_20_protection__close_above_ema_fast     = buy_protection_params[20]["close_above_ema_fast"]
-    buy_20_protection__close_above_ema_fast_len = buy_protection_params[20]["close_above_ema_fast_len"]
-    buy_20_protection__close_above_ema_slow     = buy_protection_params[20]["close_above_ema_slow"]
-    buy_20_protection__close_above_ema_slow_len = buy_protection_params[20]["close_above_ema_slow_len"]
-    buy_20_protection__sma200_rising            = buy_protection_params[20]["sma200_rising"]
-    buy_20_protection__sma200_rising_val        = buy_protection_params[20]["sma200_rising_val"]
-    buy_20_protection__sma200_1h_rising         = buy_protection_params[20]["sma200_1h_rising"]
-    buy_20_protection__sma200_1h_rising_val     = buy_protection_params[20]["sma200_1h_rising_val"]
-    buy_20_protection__safe_dips                = buy_protection_params[20]["safe_dips"]
-    buy_20_protection__safe_dips_type           = buy_protection_params[20]["safe_dips_type"]
-    buy_20_protection__safe_pump                = buy_protection_params[20]["safe_pump"]
-    buy_20_protection__safe_pump_type           = buy_protection_params[20]["safe_pump_type"]
-    buy_20_protection__safe_pump_period         = buy_protection_params[20]["safe_pump_period"]
-    buy_20_protection__btc_1h_not_downtrend     = buy_protection_params[20]["btc_1h_not_downtrend"]
-
-    buy_condition_21_enable = buy_protection_params[21]["enable"]
-    buy_21_protection__ema_fast                 = buy_protection_params[21]["ema_fast"]
-    buy_21_protection__ema_fast_len             = buy_protection_params[21]["ema_fast_len"]
-    buy_21_protection__ema_slow                 = buy_protection_params[21]["ema_slow"]
-    buy_21_protection__ema_slow_len             = buy_protection_params[21]["ema_slow_len"]
-    buy_21_protection__close_above_ema_fast     = buy_protection_params[21]["close_above_ema_fast"]
-    buy_21_protection__close_above_ema_fast_len = buy_protection_params[21]["close_above_ema_fast_len"]
-    buy_21_protection__close_above_ema_slow     = buy_protection_params[21]["close_above_ema_slow"]
-    buy_21_protection__close_above_ema_slow_len = buy_protection_params[21]["close_above_ema_slow_len"]
-    buy_21_protection__sma200_rising            = buy_protection_params[21]["sma200_rising"]
-    buy_21_protection__sma200_rising_val        = buy_protection_params[21]["sma200_rising_val"]
-    buy_21_protection__sma200_1h_rising         = buy_protection_params[21]["sma200_1h_rising"]
-    buy_21_protection__sma200_1h_rising_val     = buy_protection_params[21]["sma200_1h_rising_val"]
-    buy_21_protection__safe_dips                = buy_protection_params[21]["safe_dips"]
-    buy_21_protection__safe_dips_type           = buy_protection_params[21]["safe_dips_type"]
-    buy_21_protection__safe_pump                = buy_protection_params[21]["safe_pump"]
-    buy_21_protection__safe_pump_type           = buy_protection_params[21]["safe_pump_type"]
-    buy_21_protection__safe_pump_period         = buy_protection_params[21]["safe_pump_period"]
-    buy_21_protection__btc_1h_not_downtrend     = buy_protection_params[21]["btc_1h_not_downtrend"]
-
-    buy_condition_22_enable = buy_protection_params[22]["enable"]
-    buy_22_protection__ema_fast                 = buy_protection_params[22]["ema_fast"]
-    buy_22_protection__ema_fast_len             = buy_protection_params[22]["ema_fast_len"]
-    buy_22_protection__ema_slow                 = buy_protection_params[22]["ema_slow"]
-    buy_22_protection__ema_slow_len             = buy_protection_params[22]["ema_slow_len"]
-    buy_22_protection__close_above_ema_fast     = buy_protection_params[22]["close_above_ema_fast"]
-    buy_22_protection__close_above_ema_fast_len = buy_protection_params[22]["close_above_ema_fast_len"]
-    buy_22_protection__close_above_ema_slow     = buy_protection_params[22]["close_above_ema_slow"]
-    buy_22_protection__close_above_ema_slow_len = buy_protection_params[22]["close_above_ema_slow_len"]
-    buy_22_protection__sma200_rising            = buy_protection_params[22]["sma200_rising"]
-    buy_22_protection__sma200_rising_val        = buy_protection_params[22]["sma200_rising_val"]
-    buy_22_protection__sma200_1h_rising         = buy_protection_params[22]["sma200_1h_rising"]
-    buy_22_protection__sma200_1h_rising_val     = buy_protection_params[22]["sma200_1h_rising_val"]
-    buy_22_protection__safe_dips                = buy_protection_params[22]["safe_dips"]
-    buy_22_protection__safe_dips_type           = buy_protection_params[22]["safe_dips_type"]
-    buy_22_protection__safe_pump                = buy_protection_params[22]["safe_pump"]
-    buy_22_protection__safe_pump_type           = buy_protection_params[22]["safe_pump_type"]
-    buy_22_protection__safe_pump_period         = buy_protection_params[22]["safe_pump_period"]
-    buy_22_protection__btc_1h_not_downtrend     = buy_protection_params[22]["btc_1h_not_downtrend"]
-
-    buy_condition_23_enable = buy_protection_params[23]["enable"]
-    buy_23_protection__ema_fast                 = buy_protection_params[23]["ema_fast"]
-    buy_23_protection__ema_fast_len             = buy_protection_params[23]["ema_fast_len"]
-    buy_23_protection__ema_slow                 = buy_protection_params[23]["ema_slow"]
-    buy_23_protection__ema_slow_len             = buy_protection_params[23]["ema_slow_len"]
-    buy_23_protection__close_above_ema_fast     = buy_protection_params[23]["close_above_ema_fast"]
-    buy_23_protection__close_above_ema_fast_len = buy_protection_params[23]["close_above_ema_fast_len"]
-    buy_23_protection__close_above_ema_slow     = buy_protection_params[23]["close_above_ema_slow"]
-    buy_23_protection__close_above_ema_slow_len = buy_protection_params[23]["close_above_ema_slow_len"]
-    buy_23_protection__sma200_rising            = buy_protection_params[23]["sma200_rising"]
-    buy_23_protection__sma200_rising_val        = buy_protection_params[23]["sma200_rising_val"]
-    buy_23_protection__sma200_1h_rising         = buy_protection_params[23]["sma200_1h_rising"]
-    buy_23_protection__sma200_1h_rising_val     = buy_protection_params[23]["sma200_1h_rising_val"]
-    buy_23_protection__safe_dips                = buy_protection_params[23]["safe_dips"]
-    buy_23_protection__safe_dips_type           = buy_protection_params[23]["safe_dips_type"]
-    buy_23_protection__safe_pump                = buy_protection_params[23]["safe_pump"]
-    buy_23_protection__safe_pump_type           = buy_protection_params[23]["safe_pump_type"]
-    buy_23_protection__safe_pump_period         = buy_protection_params[23]["safe_pump_period"]
-    buy_23_protection__btc_1h_not_downtrend     = buy_protection_params[23]["btc_1h_not_downtrend"]
-
-    buy_condition_24_enable = buy_protection_params[24]["enable"]
-    buy_24_protection__ema_fast                 = buy_protection_params[24]["ema_fast"]
-    buy_24_protection__ema_fast_len             = buy_protection_params[24]["ema_fast_len"]
-    buy_24_protection__ema_slow                 = buy_protection_params[24]["ema_slow"]
-    buy_24_protection__ema_slow_len             = buy_protection_params[24]["ema_slow_len"]
-    buy_24_protection__close_above_ema_fast     = buy_protection_params[24]["close_above_ema_fast"]
-    buy_24_protection__close_above_ema_fast_len = buy_protection_params[24]["close_above_ema_fast_len"]
-    buy_24_protection__close_above_ema_slow     = buy_protection_params[24]["close_above_ema_slow"]
-    buy_24_protection__close_above_ema_slow_len = buy_protection_params[24]["close_above_ema_slow_len"]
-    buy_24_protection__sma200_rising            = buy_protection_params[24]["sma200_rising"]
-    buy_24_protection__sma200_rising_val        = buy_protection_params[24]["sma200_rising_val"]
-    buy_24_protection__sma200_1h_rising         = buy_protection_params[24]["sma200_1h_rising"]
-    buy_24_protection__sma200_1h_rising_val     = buy_protection_params[24]["sma200_1h_rising_val"]
-    buy_24_protection__safe_dips                = buy_protection_params[24]["safe_dips"]
-    buy_24_protection__safe_dips_type           = buy_protection_params[24]["safe_dips_type"]
-    buy_24_protection__safe_pump                = buy_protection_params[24]["safe_pump"]
-    buy_24_protection__safe_pump_type           = buy_protection_params[24]["safe_pump_type"]
-    buy_24_protection__safe_pump_period         = buy_protection_params[24]["safe_pump_period"]
-    buy_24_protection__btc_1h_not_downtrend     = buy_protection_params[24]["btc_1h_not_downtrend"]
-
-    buy_condition_25_enable = buy_protection_params[25]["enable"]
-    buy_25_protection__ema_fast                 = buy_protection_params[25]["ema_fast"]
-    buy_25_protection__ema_fast_len             = buy_protection_params[25]["ema_fast_len"]
-    buy_25_protection__ema_slow                 = buy_protection_params[25]["ema_slow"]
-    buy_25_protection__ema_slow_len             = buy_protection_params[25]["ema_slow_len"]
-    buy_25_protection__close_above_ema_fast     = buy_protection_params[25]["close_above_ema_fast"]
-    buy_25_protection__close_above_ema_fast_len = buy_protection_params[25]["close_above_ema_fast_len"]
-    buy_25_protection__close_above_ema_slow     = buy_protection_params[25]["close_above_ema_slow"]
-    buy_25_protection__close_above_ema_slow_len = buy_protection_params[25]["close_above_ema_slow_len"]
-    buy_25_protection__sma200_rising            = buy_protection_params[25]["sma200_rising"]
-    buy_25_protection__sma200_rising_val        = buy_protection_params[25]["sma200_rising_val"]
-    buy_25_protection__sma200_1h_rising         = buy_protection_params[25]["sma200_1h_rising"]
-    buy_25_protection__sma200_1h_rising_val     = buy_protection_params[25]["sma200_1h_rising_val"]
-    buy_25_protection__safe_dips                = buy_protection_params[25]["safe_dips"]
-    buy_25_protection__safe_dips_type           = buy_protection_params[25]["safe_dips_type"]
-    buy_25_protection__safe_pump                = buy_protection_params[25]["safe_pump"]
-    buy_25_protection__safe_pump_type           = buy_protection_params[25]["safe_pump_type"]
-    buy_25_protection__safe_pump_period         = buy_protection_params[25]["safe_pump_period"]
-    buy_25_protection__btc_1h_not_downtrend     = buy_protection_params[25]["btc_1h_not_downtrend"]
-
-    buy_condition_26_enable = buy_protection_params[26]["enable"]
-    buy_26_protection__ema_fast                 = buy_protection_params[26]["ema_fast"]
-    buy_26_protection__ema_fast_len             = buy_protection_params[26]["ema_fast_len"]
-    buy_26_protection__ema_slow                 = buy_protection_params[26]["ema_slow"]
-    buy_26_protection__ema_slow_len             = buy_protection_params[26]["ema_slow_len"]
-    buy_26_protection__close_above_ema_fast     = buy_protection_params[26]["close_above_ema_fast"]
-    buy_26_protection__close_above_ema_fast_len = buy_protection_params[26]["close_above_ema_fast_len"]
-    buy_26_protection__close_above_ema_slow     = buy_protection_params[26]["close_above_ema_slow"]
-    buy_26_protection__close_above_ema_slow_len = buy_protection_params[26]["close_above_ema_slow_len"]
-    buy_26_protection__sma200_rising            = buy_protection_params[26]["sma200_rising"]
-    buy_26_protection__sma200_rising_val        = buy_protection_params[26]["sma200_rising_val"]
-    buy_26_protection__sma200_1h_rising         = buy_protection_params[26]["sma200_1h_rising"]
-    buy_26_protection__sma200_1h_rising_val     = buy_protection_params[26]["sma200_1h_rising_val"]
-    buy_26_protection__safe_dips                = buy_protection_params[26]["safe_dips"]
-    buy_26_protection__safe_dips_type           = buy_protection_params[26]["safe_dips_type"]
-    buy_26_protection__safe_pump                = buy_protection_params[26]["safe_pump"]
-    buy_26_protection__safe_pump_type           = buy_protection_params[26]["safe_pump_type"]
-    buy_26_protection__safe_pump_period         = buy_protection_params[26]["safe_pump_period"]
-    buy_26_protection__btc_1h_not_downtrend     = buy_protection_params[26]["btc_1h_not_downtrend"]
-
-    buy_condition_27_enable = buy_protection_params[27]["enable"]
-    buy_27_protection__ema_fast                 = buy_protection_params[27]["ema_fast"]
-    buy_27_protection__ema_fast_len             = buy_protection_params[27]["ema_fast_len"]
-    buy_27_protection__ema_slow                 = buy_protection_params[27]["ema_slow"]
-    buy_27_protection__ema_slow_len             = buy_protection_params[27]["ema_slow_len"]
-    buy_27_protection__close_above_ema_fast     = buy_protection_params[27]["close_above_ema_fast"]
-    buy_27_protection__close_above_ema_fast_len = buy_protection_params[27]["close_above_ema_fast_len"]
-    buy_27_protection__close_above_ema_slow     = buy_protection_params[27]["close_above_ema_slow"]
-    buy_27_protection__close_above_ema_slow_len = buy_protection_params[27]["close_above_ema_slow_len"]
-    buy_27_protection__sma200_rising            = buy_protection_params[27]["sma200_rising"]
-    buy_27_protection__sma200_rising_val        = buy_protection_params[27]["sma200_rising_val"]
-    buy_27_protection__sma200_1h_rising         = buy_protection_params[27]["sma200_1h_rising"]
-    buy_27_protection__sma200_1h_rising_val     = buy_protection_params[27]["sma200_1h_rising_val"]
-    buy_27_protection__safe_dips                = buy_protection_params[27]["safe_dips"]
-    buy_27_protection__safe_dips_type           = buy_protection_params[27]["safe_dips_type"]
-    buy_27_protection__safe_pump                = buy_protection_params[27]["safe_pump"]
-    buy_27_protection__safe_pump_type           = buy_protection_params[27]["safe_pump_type"]
-    buy_27_protection__safe_pump_period         = buy_protection_params[27]["safe_pump_period"]
-    buy_27_protection__btc_1h_not_downtrend     = buy_protection_params[27]["btc_1h_not_downtrend"]
-
-    buy_condition_28_enable = buy_protection_params[28]["enable"]
-    buy_28_protection__ema_fast                 = buy_protection_params[28]["ema_fast"]
-    buy_28_protection__ema_fast_len             = buy_protection_params[28]["ema_fast_len"]
-    buy_28_protection__ema_slow                 = buy_protection_params[28]["ema_slow"]
-    buy_28_protection__ema_slow_len             = buy_protection_params[28]["ema_slow_len"]
-    buy_28_protection__close_above_ema_fast     = buy_protection_params[28]["close_above_ema_fast"]
-    buy_28_protection__close_above_ema_fast_len = buy_protection_params[28]["close_above_ema_fast_len"]
-    buy_28_protection__close_above_ema_slow     = buy_protection_params[28]["close_above_ema_slow"]
-    buy_28_protection__close_above_ema_slow_len = buy_protection_params[28]["close_above_ema_slow_len"]
-    buy_28_protection__sma200_rising            = buy_protection_params[28]["sma200_rising"]
-    buy_28_protection__sma200_rising_val        = buy_protection_params[28]["sma200_rising_val"]
-    buy_28_protection__sma200_1h_rising         = buy_protection_params[28]["sma200_1h_rising"]
-    buy_28_protection__sma200_1h_rising_val     = buy_protection_params[28]["sma200_1h_rising_val"]
-    buy_28_protection__safe_dips                = buy_protection_params[28]["safe_dips"]
-    buy_28_protection__safe_dips_type           = buy_protection_params[28]["safe_dips_type"]
-    buy_28_protection__safe_pump                = buy_protection_params[28]["safe_pump"]
-    buy_28_protection__safe_pump_type           = buy_protection_params[28]["safe_pump_type"]
-    buy_28_protection__safe_pump_period         = buy_protection_params[28]["safe_pump_period"]
-    buy_28_protection__btc_1h_not_downtrend     = buy_protection_params[28]["btc_1h_not_downtrend"]
-
-    buy_condition_29_enable = buy_protection_params[29]["enable"]
-    buy_29_protection__ema_fast                 = buy_protection_params[29]["ema_fast"]
-    buy_29_protection__ema_fast_len             = buy_protection_params[29]["ema_fast_len"]
-    buy_29_protection__ema_slow                 = buy_protection_params[29]["ema_slow"]
-    buy_29_protection__ema_slow_len             = buy_protection_params[29]["ema_slow_len"]
-    buy_29_protection__close_above_ema_fast     = buy_protection_params[29]["close_above_ema_fast"]
-    buy_29_protection__close_above_ema_fast_len = buy_protection_params[29]["close_above_ema_fast_len"]
-    buy_29_protection__close_above_ema_slow     = buy_protection_params[29]["close_above_ema_slow"]
-    buy_29_protection__close_above_ema_slow_len = buy_protection_params[29]["close_above_ema_slow_len"]
-    buy_29_protection__sma200_rising            = buy_protection_params[29]["sma200_rising"]
-    buy_29_protection__sma200_rising_val        = buy_protection_params[29]["sma200_rising_val"]
-    buy_29_protection__sma200_1h_rising         = buy_protection_params[29]["sma200_1h_rising"]
-    buy_29_protection__sma200_1h_rising_val     = buy_protection_params[29]["sma200_1h_rising_val"]
-    buy_29_protection__safe_dips                = buy_protection_params[29]["safe_dips"]
-    buy_29_protection__safe_dips_type           = buy_protection_params[29]["safe_dips_type"]
-    buy_29_protection__safe_pump                = buy_protection_params[29]["safe_pump"]
-    buy_29_protection__safe_pump_type           = buy_protection_params[29]["safe_pump_type"]
-    buy_29_protection__safe_pump_period         = buy_protection_params[29]["safe_pump_period"]
-    buy_29_protection__btc_1h_not_downtrend     = buy_protection_params[29]["btc_1h_not_downtrend"]
-
-    buy_condition_30_enable = buy_protection_params[30]["enable"]
-    buy_30_protection__ema_fast                 = buy_protection_params[30]["ema_fast"]
-    buy_30_protection__ema_fast_len             = buy_protection_params[30]["ema_fast_len"]
-    buy_30_protection__ema_slow                 = buy_protection_params[30]["ema_slow"]
-    buy_30_protection__ema_slow_len             = buy_protection_params[30]["ema_slow_len"]
-    buy_30_protection__close_above_ema_fast     = buy_protection_params[30]["close_above_ema_fast"]
-    buy_30_protection__close_above_ema_fast_len = buy_protection_params[30]["close_above_ema_fast_len"]
-    buy_30_protection__close_above_ema_slow     = buy_protection_params[30]["close_above_ema_slow"]
-    buy_30_protection__close_above_ema_slow_len = buy_protection_params[30]["close_above_ema_slow_len"]
-    buy_30_protection__sma200_rising            = buy_protection_params[30]["sma200_rising"]
-    buy_30_protection__sma200_rising_val        = buy_protection_params[30]["sma200_rising_val"]
-    buy_30_protection__sma200_1h_rising         = buy_protection_params[30]["sma200_1h_rising"]
-    buy_30_protection__sma200_1h_rising_val     = buy_protection_params[30]["sma200_1h_rising_val"]
-    buy_30_protection__safe_dips                = buy_protection_params[30]["safe_dips"]
-    buy_30_protection__safe_dips_type           = buy_protection_params[30]["safe_dips_type"]
-    buy_30_protection__safe_pump                = buy_protection_params[30]["safe_pump"]
-    buy_30_protection__safe_pump_type           = buy_protection_params[30]["safe_pump_type"]
-    buy_30_protection__safe_pump_period         = buy_protection_params[30]["safe_pump_period"]
-    buy_30_protection__btc_1h_not_downtrend     = buy_protection_params[30]["btc_1h_not_downtrend"]
-
-    buy_condition_31_enable = buy_protection_params[31]["enable"]
-    buy_31_protection__ema_fast                 = buy_protection_params[31]["ema_fast"]
-    buy_31_protection__ema_fast_len             = buy_protection_params[31]["ema_fast_len"]
-    buy_31_protection__ema_slow                 = buy_protection_params[31]["ema_slow"]
-    buy_31_protection__ema_slow_len             = buy_protection_params[31]["ema_slow_len"]
-    buy_31_protection__close_above_ema_fast     = buy_protection_params[31]["close_above_ema_fast"]
-    buy_31_protection__close_above_ema_fast_len = buy_protection_params[31]["close_above_ema_fast_len"]
-    buy_31_protection__close_above_ema_slow     = buy_protection_params[31]["close_above_ema_slow"]
-    buy_31_protection__close_above_ema_slow_len = buy_protection_params[31]["close_above_ema_slow_len"]
-    buy_31_protection__sma200_rising            = buy_protection_params[31]["sma200_rising"]
-    buy_31_protection__sma200_rising_val        = buy_protection_params[31]["sma200_rising_val"]
-    buy_31_protection__sma200_1h_rising         = buy_protection_params[31]["sma200_1h_rising"]
-    buy_31_protection__sma200_1h_rising_val     = buy_protection_params[31]["sma200_1h_rising_val"]
-    buy_31_protection__safe_dips                = buy_protection_params[31]["safe_dips"]
-    buy_31_protection__safe_dips_type           = buy_protection_params[31]["safe_dips_type"]
-    buy_31_protection__safe_pump                = buy_protection_params[31]["safe_pump"]
-    buy_31_protection__safe_pump_type           = buy_protection_params[31]["safe_pump_type"]
-    buy_31_protection__safe_pump_period         = buy_protection_params[31]["safe_pump_period"]
-    buy_31_protection__btc_1h_not_downtrend     = buy_protection_params[31]["btc_1h_not_downtrend"]
-
-    buy_condition_32_enable = buy_protection_params[32]["enable"]
-    buy_32_protection__ema_fast                 = buy_protection_params[32]["ema_fast"]
-    buy_32_protection__ema_fast_len             = buy_protection_params[32]["ema_fast_len"]
-    buy_32_protection__ema_slow                 = buy_protection_params[32]["ema_slow"]
-    buy_32_protection__ema_slow_len             = buy_protection_params[32]["ema_slow_len"]
-    buy_32_protection__close_above_ema_fast     = buy_protection_params[32]["close_above_ema_fast"]
-    buy_32_protection__close_above_ema_fast_len = buy_protection_params[32]["close_above_ema_fast_len"]
-    buy_32_protection__close_above_ema_slow     = buy_protection_params[32]["close_above_ema_slow"]
-    buy_32_protection__close_above_ema_slow_len = buy_protection_params[32]["close_above_ema_slow_len"]
-    buy_32_protection__sma200_rising            = buy_protection_params[32]["sma200_rising"]
-    buy_32_protection__sma200_rising_val        = buy_protection_params[32]["sma200_rising_val"]
-    buy_32_protection__sma200_1h_rising         = buy_protection_params[32]["sma200_1h_rising"]
-    buy_32_protection__sma200_1h_rising_val     = buy_protection_params[32]["sma200_1h_rising_val"]
-    buy_32_protection__safe_dips                = buy_protection_params[32]["safe_dips"]
-    buy_32_protection__safe_dips_type           = buy_protection_params[32]["safe_dips_type"]
-    buy_32_protection__safe_pump                = buy_protection_params[32]["safe_pump"]
-    buy_32_protection__safe_pump_type           = buy_protection_params[32]["safe_pump_type"]
-    buy_32_protection__safe_pump_period         = buy_protection_params[32]["safe_pump_period"]
-    buy_32_protection__btc_1h_not_downtrend     = buy_protection_params[32]["btc_1h_not_downtrend"]
-
-    buy_condition_33_enable = buy_protection_params[33]["enable"]
-    buy_33_protection__ema_fast                 = buy_protection_params[33]["ema_fast"]
-    buy_33_protection__ema_fast_len             = buy_protection_params[33]["ema_fast_len"]
-    buy_33_protection__ema_slow                 = buy_protection_params[33]["ema_slow"]
-    buy_33_protection__ema_slow_len             = buy_protection_params[33]["ema_slow_len"]
-    buy_33_protection__close_above_ema_fast     = buy_protection_params[33]["close_above_ema_fast"]
-    buy_33_protection__close_above_ema_fast_len = buy_protection_params[33]["close_above_ema_fast_len"]
-    buy_33_protection__close_above_ema_slow     = buy_protection_params[33]["close_above_ema_slow"]
-    buy_33_protection__close_above_ema_slow_len = buy_protection_params[33]["close_above_ema_slow_len"]
-    buy_33_protection__sma200_rising            = buy_protection_params[33]["sma200_rising"]
-    buy_33_protection__sma200_rising_val        = buy_protection_params[33]["sma200_rising_val"]
-    buy_33_protection__sma200_1h_rising         = buy_protection_params[33]["sma200_1h_rising"]
-    buy_33_protection__sma200_1h_rising_val     = buy_protection_params[33]["sma200_1h_rising_val"]
-    buy_33_protection__safe_dips                = buy_protection_params[33]["safe_dips"]
-    buy_33_protection__safe_dips_type           = buy_protection_params[33]["safe_dips_type"]
-    buy_33_protection__safe_pump                = buy_protection_params[33]["safe_pump"]
-    buy_33_protection__safe_pump_type           = buy_protection_params[33]["safe_pump_type"]
-    buy_33_protection__safe_pump_period         = buy_protection_params[33]["safe_pump_period"]
-    buy_33_protection__btc_1h_not_downtrend     = buy_protection_params[33]["btc_1h_not_downtrend"]
-
-    buy_condition_34_enable = buy_protection_params[34]["enable"]
-    buy_34_protection__ema_fast                 = buy_protection_params[34]["ema_fast"]
-    buy_34_protection__ema_fast_len             = buy_protection_params[34]["ema_fast_len"]
-    buy_34_protection__ema_slow                 = buy_protection_params[34]["ema_slow"]
-    buy_34_protection__ema_slow_len             = buy_protection_params[34]["ema_slow_len"]
-    buy_34_protection__close_above_ema_fast     = buy_protection_params[34]["close_above_ema_fast"]
-    buy_34_protection__close_above_ema_fast_len = buy_protection_params[34]["close_above_ema_fast_len"]
-    buy_34_protection__close_above_ema_slow     = buy_protection_params[34]["close_above_ema_slow"]
-    buy_34_protection__close_above_ema_slow_len = buy_protection_params[34]["close_above_ema_slow_len"]
-    buy_34_protection__sma200_rising            = buy_protection_params[34]["sma200_rising"]
-    buy_34_protection__sma200_rising_val        = buy_protection_params[34]["sma200_rising_val"]
-    buy_34_protection__sma200_1h_rising         = buy_protection_params[34]["sma200_1h_rising"]
-    buy_34_protection__sma200_1h_rising_val     = buy_protection_params[34]["sma200_1h_rising_val"]
-    buy_34_protection__safe_dips                = buy_protection_params[34]["safe_dips"]
-    buy_34_protection__safe_dips_type           = buy_protection_params[34]["safe_dips_type"]
-    buy_34_protection__safe_pump                = buy_protection_params[34]["safe_pump"]
-    buy_34_protection__safe_pump_type           = buy_protection_params[34]["safe_pump_type"]
-    buy_34_protection__safe_pump_period         = buy_protection_params[34]["safe_pump_period"]
-    buy_34_protection__btc_1h_not_downtrend     = buy_protection_params[34]["btc_1h_not_downtrend"]
-
     # Strict dips - level 10
-    buy_dip_threshold_10_1 = DecimalParameter(0.001, 0.05, default=0.015, space='buy', decimals=3, optimize=False, load=True)
-    buy_dip_threshold_10_2 = DecimalParameter(0.01, 0.2, default=0.1, space='buy', decimals=3, optimize=False, load=True)
-    buy_dip_threshold_10_3 = DecimalParameter(0.1, 0.3, default=0.24, space='buy', decimals=3, optimize=False, load=True)
-    buy_dip_threshold_10_4 = DecimalParameter(0.3, 0.5, default=0.42, space='buy', decimals=3, optimize=False, load=True)
+    buy_dip_threshold_10_1 = 0.015
+    buy_dip_threshold_10_2 = 0.1
+    buy_dip_threshold_10_3 = 0.24
+    buy_dip_threshold_10_4 = 0.42
     # Strict dips - level 20
-    buy_dip_threshold_20_1 = DecimalParameter(0.001, 0.05, default=0.016, space='buy', decimals=3, optimize=False, load=True)
-    buy_dip_threshold_20_2 = DecimalParameter(0.01, 0.2, default=0.11, space='buy', decimals=3, optimize=False, load=True)
-    buy_dip_threshold_20_3 = DecimalParameter(0.1, 0.4, default=0.26, space='buy', decimals=3, optimize=False, load=True)
-    buy_dip_threshold_20_4 = DecimalParameter(0.36, 0.56, default=0.44, space='buy', decimals=3, optimize=False, load=True)
+    buy_dip_threshold_20_1 = 0.016
+    buy_dip_threshold_20_2 = 0.11
+    buy_dip_threshold_20_3 = 0.26
+    buy_dip_threshold_20_4 = 0.44
     # Strict dips - level 30
-    buy_dip_threshold_30_1 = DecimalParameter(0.001, 0.05, default=0.018, space='buy', decimals=3, optimize=False, load=True)
-    buy_dip_threshold_30_2 = DecimalParameter(0.01, 0.2, default=0.12, space='buy', decimals=3, optimize=False, load=True)
-    buy_dip_threshold_30_3 = DecimalParameter(0.1, 0.4, default=0.28, space='buy', decimals=3, optimize=False, load=True)
-    buy_dip_threshold_30_4 = DecimalParameter(0.36, 0.56, default=0.46, space='buy', decimals=3, optimize=False, load=True)
+    buy_dip_threshold_30_1 = 0.018
+    buy_dip_threshold_30_2 = 0.12
+    buy_dip_threshold_30_3 = 0.28
+    buy_dip_threshold_30_4 = 0.46
     # Strict dips - level 40
-    buy_dip_threshold_40_1 = DecimalParameter(0.001, 0.05, default=0.019, space='buy', decimals=3, optimize=False, load=True)
-    buy_dip_threshold_40_2 = DecimalParameter(0.01, 0.2, default=0.13, space='buy', decimals=3, optimize=False, load=True)
-    buy_dip_threshold_40_3 = DecimalParameter(0.1, 0.4, default=0.3, space='buy', decimals=3, optimize=False, load=True)
-    buy_dip_threshold_40_4 = DecimalParameter(0.36, 0.56, default=0.48, space='buy', decimals=3, optimize=False, load=True)
+    buy_dip_threshold_40_1 = 0.019
+    buy_dip_threshold_40_2 = 0.13
+    buy_dip_threshold_40_3 = 0.3
+    buy_dip_threshold_40_4 = 0.48
     # Normal dips - level 50
-    buy_dip_threshold_50_1 = DecimalParameter(0.001, 0.05, default=0.02, space='buy', decimals=3, optimize=False, load=True)
-    buy_dip_threshold_50_2 = DecimalParameter(0.01, 0.2, default=0.14, space='buy', decimals=3, optimize=False, load=True)
-    buy_dip_threshold_50_3 = DecimalParameter(0.05, 0.4, default=0.32, space='buy', decimals=3, optimize=False, load=True)
-    buy_dip_threshold_50_4 = DecimalParameter(0.2, 0.5, default=0.5, space='buy', decimals=3, optimize=False, load=True)
+    buy_dip_threshold_50_1 = 0.02
+    buy_dip_threshold_50_2 = 0.14
+    buy_dip_threshold_50_3 = 0.32
+    buy_dip_threshold_50_4 = 0.5
     # Normal dips - level 60
-    buy_dip_threshold_60_1 = DecimalParameter(0.001, 0.05, default=0.022, space='buy', decimals=3, optimize=False, load=True)
-    buy_dip_threshold_60_2 = DecimalParameter(0.1, 0.22, default=0.18, space='buy', decimals=3, optimize=False, load=True)
-    buy_dip_threshold_60_3 = DecimalParameter(0.2, 0.4, default=0.34, space='buy', decimals=3, optimize=False, load=True)
-    buy_dip_threshold_60_4 = DecimalParameter(0.4, 0.6, default=0.56, space='buy', decimals=3, optimize=False, load=True)
+    buy_dip_threshold_60_1 = 0.022
+    buy_dip_threshold_60_2 = 0.18
+    buy_dip_threshold_60_3 = 0.34
+    buy_dip_threshold_60_4 = 0.56
     # Normal dips - level 70
-    buy_dip_threshold_70_1 = DecimalParameter(0.001, 0.05, default=0.023, space='buy', decimals=3, optimize=False, load=True)
-    buy_dip_threshold_70_2 = DecimalParameter(0.16, 0.28, default=0.2, space='buy', decimals=3, optimize=False, load=True)
-    buy_dip_threshold_70_3 = DecimalParameter(0.2, 0.4, default=0.36, space='buy', decimals=3, optimize=False, load=True)
-    buy_dip_threshold_70_4 = DecimalParameter(0.5, 0.7, default=0.6, space='buy', decimals=3, optimize=False, load=True)
+    buy_dip_threshold_70_1 = 0.023
+    buy_dip_threshold_70_2 = 0.2
+    buy_dip_threshold_70_3 = 0.36
+    buy_dip_threshold_70_4 = 0.6
     # Normal dips - level 80
-    buy_dip_threshold_80_1 = DecimalParameter(0.001, 0.05, default=0.024, space='buy', decimals=3, optimize=False, load=True)
-    buy_dip_threshold_80_2 = DecimalParameter(0.16, 0.28, default=0.22, space='buy', decimals=3, optimize=False, load=True)
-    buy_dip_threshold_80_3 = DecimalParameter(0.2, 0.4, default=0.38, space='buy', decimals=3, optimize=False, load=True)
-    buy_dip_threshold_80_4 = DecimalParameter(0.5, 0.7, default=0.66, space='buy', decimals=3, optimize=False, load=True)
+    buy_dip_threshold_80_1 = 0.024
+    buy_dip_threshold_80_2 = 0.22
+    buy_dip_threshold_80_3 = 0.38
+    buy_dip_threshold_80_4 = 0.66
     # Normal dips - level 70
-    buy_dip_threshold_90_1 = DecimalParameter(0.001, 0.05, default=0.025, space='buy', decimals=3, optimize=False, load=True)
-    buy_dip_threshold_90_2 = DecimalParameter(0.16, 0.28, default=0.23, space='buy', decimals=3, optimize=False, load=True)
-    buy_dip_threshold_90_3 = DecimalParameter(0.3, 0.5, default=0.4, space='buy', decimals=3, optimize=False, load=True)
-    buy_dip_threshold_90_4 = DecimalParameter(0.6, 0.8, default=0.7, space='buy', decimals=3, optimize=False, load=True)
+    buy_dip_threshold_90_1 = 0.025
+    buy_dip_threshold_90_2 = 0.23
+    buy_dip_threshold_90_3 = 0.4
+    buy_dip_threshold_90_4 = 0.7
     # Loose dips - level 100
-    buy_dip_threshold_100_1 = DecimalParameter(0.001, 0.05, default=0.026, space='buy', decimals=3, optimize=False, load=True)
-    buy_dip_threshold_100_2 = DecimalParameter(0.16, 0.3, default=0.24, space='buy', decimals=3, optimize=False, load=True)
-    buy_dip_threshold_100_3 = DecimalParameter(0.3, 0.5, default=0.42, space='buy', decimals=3, optimize=False, load=True)
-    buy_dip_threshold_100_4 = DecimalParameter(0.6, 1.0, default=0.8, space='buy', decimals=3, optimize=False, load=True)
+    buy_dip_threshold_100_1 = 0.026
+    buy_dip_threshold_100_2 = 0.24
+    buy_dip_threshold_100_3 = 0.42
+    buy_dip_threshold_100_4 = 0.8
     # Loose dips - level 110
-    buy_dip_threshold_110_1 = DecimalParameter(0.001, 0.05, default=0.027, space='buy', decimals=3, optimize=False, load=True)
-    buy_dip_threshold_110_2 = DecimalParameter(0.16, 0.3, default=0.26, space='buy', decimals=3, optimize=False, load=True)
-    buy_dip_threshold_110_3 = DecimalParameter(0.3, 0.5, default=0.44, space='buy', decimals=3, optimize=False, load=True)
-    buy_dip_threshold_110_4 = DecimalParameter(0.6, 1.0, default=0.84, space='buy', decimals=3, optimize=False, load=True)
+    buy_dip_threshold_110_1 = 0.027
+    buy_dip_threshold_110_2 = 0.26
+    buy_dip_threshold_110_3 = 0.44
+    buy_dip_threshold_110_4 = 0.84
     # Loose dips - level 120
-    buy_dip_threshold_120_1 = DecimalParameter(0.001, 0.05, default=0.028, space='buy', decimals=3, optimize=False, load=True)
-    buy_dip_threshold_120_2 = DecimalParameter(0.16, 0.3, default=0.28, space='buy', decimals=3, optimize=False, load=True)
-    buy_dip_threshold_120_3 = DecimalParameter(0.3, 0.5, default=0.46, space='buy', decimals=3, optimize=False, load=True)
-    buy_dip_threshold_120_4 = DecimalParameter(0.6, 1.0, default=0.86, space='buy', decimals=3, optimize=False, load=True)
+    buy_dip_threshold_120_1 = 0.028
+    buy_dip_threshold_120_2 = 0.28
+    buy_dip_threshold_120_3 = 0.46
+    buy_dip_threshold_120_4 = 0.86
     # Loose dips - level 130
-    buy_dip_threshold_130_1 = DecimalParameter(0.001, 0.05, default=0.028, space='buy', decimals=3, optimize=False, load=True)
-    buy_dip_threshold_130_2 = DecimalParameter(0.16, 0.34, default=0.3, space='buy', decimals=3, optimize=False, load=True)
-    buy_dip_threshold_130_3 = DecimalParameter(0.36, 0.56, default=0.48, space='buy', decimals=3, optimize=False, load=True)
-    buy_dip_threshold_130_4 = DecimalParameter(0.6, 1.0, default=0.9, space='buy', decimals=3, optimize=False, load=True)
+    buy_dip_threshold_130_1 = 0.028
+    buy_dip_threshold_130_2 = 0.3
+    buy_dip_threshold_130_3 = 0.48
+    buy_dip_threshold_130_4 = 0.9
 
     # 24 hours - level 10
-    buy_pump_pull_threshold_10_24 = DecimalParameter(1.5, 3.0, default=2.2, space='buy', decimals=2, optimize=False, load=True)
-    buy_pump_threshold_10_24 = DecimalParameter(0.4, 1.0, default=0.42, space='buy', decimals=3, optimize=False, load=True)
+    buy_pump_pull_threshold_10_24 = 2.2
+    buy_pump_threshold_10_24 = 0.42
     # 36 hours - level 10
-    buy_pump_pull_threshold_10_36 = DecimalParameter(1.5, 3.0, default=2.0, space='buy', decimals=2, optimize=False, load=True)
-    buy_pump_threshold_10_36 = DecimalParameter(0.4, 1.0, default=0.58, space='buy', decimals=3, optimize=False, load=True)
+    buy_pump_pull_threshold_10_36 = 2.0
+    buy_pump_threshold_10_36 = 0.58
     # 48 hours - level 10
-    buy_pump_pull_threshold_10_48 = DecimalParameter(1.5, 3.0, default=2.0, space='buy', decimals=2, optimize=False, load=True)
-    buy_pump_threshold_10_48 = DecimalParameter(0.4, 1.0, default=0.8, space='buy', decimals=3, optimize=False, load=True)
+    buy_pump_pull_threshold_10_48 = 2.0
+    buy_pump_threshold_10_48 = 0.8
 
     # 24 hours - level 20
-    buy_pump_pull_threshold_20_24 = DecimalParameter(1.5, 3.0, default=2.2, space='buy', decimals=2, optimize=False, load=True)
-    buy_pump_threshold_20_24 = DecimalParameter(0.4, 1.0, default=0.46, space='buy', decimals=3, optimize=False, load=True)
+    buy_pump_pull_threshold_20_24 = 2.2
+    buy_pump_threshold_20_24 = 0.46
     # 36 hours - level 20
-    buy_pump_pull_threshold_20_36 = DecimalParameter(1.5, 3.0, default=2.0, space='buy', decimals=2, optimize=False, load=True)
-    buy_pump_threshold_20_36 = DecimalParameter(0.4, 1.0, default=0.6, space='buy', decimals=3, optimize=False, load=True)
+    buy_pump_pull_threshold_20_36 = 2.0
+    buy_pump_threshold_20_36 = 0.6
     # 48 hours - level 20
-    buy_pump_pull_threshold_20_48 = DecimalParameter(1.5, 3.0, default=2.0, space='buy', decimals=2, optimize=False, load=True)
-    buy_pump_threshold_20_48 = DecimalParameter(0.4, 1.0, default=0.81, space='buy', decimals=3, optimize=False, load=True)
+    buy_pump_pull_threshold_20_48 = 2.0
+    buy_pump_threshold_20_48 = 0.81
 
     # 24 hours - level 30
-    buy_pump_pull_threshold_30_24 = DecimalParameter(1.5, 3.0, default=2.2, space='buy', decimals=2, optimize=False, load=True)
-    buy_pump_threshold_30_24 = DecimalParameter(0.4, 1.0, default=0.5, space='buy', decimals=3, optimize=False, load=True)
+    buy_pump_pull_threshold_30_24 = 2.2
+    buy_pump_threshold_30_24 = 0.5
     # 36 hours - level 30
-    buy_pump_pull_threshold_30_36 = DecimalParameter(1.5, 3.0, default=2.0, space='buy', decimals=2, optimize=False, load=True)
-    buy_pump_threshold_30_36 = DecimalParameter(0.4, 1.0, default=0.62, space='buy', decimals=3, optimize=False, load=True)
+    buy_pump_pull_threshold_30_36 = 2.0
+    buy_pump_threshold_30_36 = 0.62
     # 48 hours - level 30
-    buy_pump_pull_threshold_30_48 = DecimalParameter(1.5, 3.0, default=2.0, space='buy', decimals=2, optimize=False, load=True)
-    buy_pump_threshold_30_48 = DecimalParameter(0.4, 1.0, default=0.82, space='buy', decimals=3, optimize=False, load=True)
+    buy_pump_pull_threshold_30_48 = 2.0
+    buy_pump_threshold_30_48 = 0.82
 
     # 24 hours - level 40
-    buy_pump_pull_threshold_40_24 = DecimalParameter(1.5, 3.0, default=2.2, space='buy', decimals=2, optimize=False, load=True)
-    buy_pump_threshold_40_24 = DecimalParameter(0.4, 1.0, default=0.54, space='buy', decimals=3, optimize=False, load=True)
+    buy_pump_pull_threshold_40_24 = 2.2
+    buy_pump_threshold_40_24 = 0.54
     # 36 hours - level 40
-    buy_pump_pull_threshold_40_36 = DecimalParameter(1.5, 3.0, default=2.0, space='buy', decimals=2, optimize=False, load=True)
-    buy_pump_threshold_40_36 = DecimalParameter(0.4, 1.0, default=0.63, space='buy', decimals=3, optimize=False, load=True)
+    buy_pump_pull_threshold_40_36 = 2.0
+    buy_pump_threshold_40_36 = 0.63
     # 48 hours - level 40
-    buy_pump_pull_threshold_40_48 = DecimalParameter(1.5, 3.0, default=2.0, space='buy', decimals=2, optimize=False, load=True)
-    buy_pump_threshold_40_48 = DecimalParameter(0.4, 1.0, default=0.84, space='buy', decimals=3, optimize=False, load=True)
+    buy_pump_pull_threshold_40_48 = 2.0
+    buy_pump_threshold_40_48 = 0.84
 
     # 24 hours - level 50
-    buy_pump_pull_threshold_50_24 = DecimalParameter(1.5, 3.0, default=1.75, space='buy', decimals=2, optimize=False, load=True)
-    buy_pump_threshold_50_24 = DecimalParameter(0.4, 1.0, default=0.6, space='buy', decimals=3, optimize=False, load=True)
+    buy_pump_pull_threshold_50_24 = 1.75
+    buy_pump_threshold_50_24 = 0.6
     # 36 hours - level 50
-    buy_pump_pull_threshold_50_36 = DecimalParameter(1.5, 3.0, default=1.75, space='buy', decimals=2, optimize=False, load=True)
-    buy_pump_threshold_50_36 = DecimalParameter(0.4, 1.0, default=0.64, space='buy', decimals=3, optimize=False, load=True)
+    buy_pump_pull_threshold_50_36 = 1.75
+    buy_pump_threshold_50_36 = 0.64
     # 48 hours - level 50
-    buy_pump_pull_threshold_50_48 = DecimalParameter(1.5, 3.0, default=1.75, space='buy', decimals=2, optimize=False, load=True)
-    buy_pump_threshold_50_48 = DecimalParameter(0.4, 1.0, default=0.85, space='buy', decimals=3, optimize=False, load=True)
+    buy_pump_pull_threshold_50_48 = 1.75
+    buy_pump_threshold_50_48 = 0.85
 
     # 24 hours - level 60
-    buy_pump_pull_threshold_60_24 = DecimalParameter(1.5, 3.0, default=1.75, space='buy', decimals=2, optimize=False, load=True)
-    buy_pump_threshold_60_24 = DecimalParameter(0.4, 1.0, default=0.62, space='buy', decimals=3, optimize=False, load=True)
+    buy_pump_pull_threshold_60_24 = 1.75
+    buy_pump_threshold_60_24 = 0.62
     # 36 hours - level 60
-    buy_pump_pull_threshold_60_36 = DecimalParameter(1.5, 3.0, default=1.75, space='buy', decimals=2, optimize=False, load=True)
-    buy_pump_threshold_60_36 = DecimalParameter(0.4, 1.0, default=0.66, space='buy', decimals=3, optimize=False, load=True)
+    buy_pump_pull_threshold_60_36 = 1.75
+    buy_pump_threshold_60_36 = 0.66
     # 48 hours - level 60
-    buy_pump_pull_threshold_60_48 = DecimalParameter(1.5, 3.0, default=1.75, space='buy', decimals=2, optimize=False, load=True)
-    buy_pump_threshold_60_48 = DecimalParameter(0.4, 1.0, default=0.9, space='buy', decimals=3, optimize=False, load=True)
+    buy_pump_pull_threshold_60_48 = 1.75
+    buy_pump_threshold_60_48 = 0.9
 
     # 24 hours - level 70
-    buy_pump_pull_threshold_70_24 = DecimalParameter(1.5, 3.0, default=1.75, space='buy', decimals=2, optimize=False, load=True)
-    buy_pump_threshold_70_24 = DecimalParameter(0.4, 1.0, default=0.63, space='buy', decimals=3, optimize=False, load=True)
+    buy_pump_pull_threshold_70_24 = 1.75
+    buy_pump_threshold_70_24 = 0.63
     # 36 hours - level 70
-    buy_pump_pull_threshold_70_36 = DecimalParameter(1.5, 3.0, default=1.75, space='buy', decimals=2, optimize=False, load=True)
-    buy_pump_threshold_70_36 = DecimalParameter(0.4, 1.0, default=0.67, space='buy', decimals=3, optimize=False, load=True)
+    buy_pump_pull_threshold_70_36 = 1.75
+    buy_pump_threshold_70_36 = 0.67
     # 48 hours - level 70
-    buy_pump_pull_threshold_70_48 = DecimalParameter(1.5, 3.0, default=1.75, space='buy', decimals=2, optimize=False, load=True)
-    buy_pump_threshold_70_48 = DecimalParameter(0.4, 1.0, default=0.95, space='buy', decimals=3, optimize=False, load=True)
+    buy_pump_pull_threshold_70_48 = 1.75
+    buy_pump_threshold_70_48 = 0.95
 
     # 24 hours - level 80
-    buy_pump_pull_threshold_80_24 = DecimalParameter(1.5, 3.0, default=1.75, space='buy', decimals=2, optimize=False, load=True)
-    buy_pump_threshold_80_24 = DecimalParameter(0.4, 1.0, default=0.64, space='buy', decimals=3, optimize=False, load=True)
+    buy_pump_pull_threshold_80_24 = 1.75
+    buy_pump_threshold_80_24 = 0.64
     # 36 hours - level 80
-    buy_pump_pull_threshold_80_36 = DecimalParameter(1.5, 3.0, default=1.75, space='buy', decimals=2, optimize=False, load=True)
-    buy_pump_threshold_80_36 = DecimalParameter(0.4, 1.0, default=0.68, space='buy', decimals=3, optimize=False, load=True)
+    buy_pump_pull_threshold_80_36 = 1.75
+    buy_pump_threshold_80_36 = 0.68
     # 48 hours - level 80
-    buy_pump_pull_threshold_80_48 = DecimalParameter(1.5, 3.0, default=1.75, space='buy', decimals=2, optimize=False, load=True)
-    buy_pump_threshold_80_48 = DecimalParameter(0.8, 1.1, default=1.0, space='buy', decimals=3, optimize=False, load=True)
+    buy_pump_pull_threshold_80_48 = 1.75
+    buy_pump_threshold_80_48 = 1.0
 
     # 24 hours - level 90
-    buy_pump_pull_threshold_90_24 = DecimalParameter(1.5, 3.0, default=1.75, space='buy', decimals=2, optimize=False, load=True)
-    buy_pump_threshold_90_24 = DecimalParameter(0.4, 1.0, default=0.65, space='buy', decimals=3, optimize=False, load=True)
+    buy_pump_pull_threshold_90_24 = 1.75
+    buy_pump_threshold_90_24 = 0.65
     # 36 hours - level 90
-    buy_pump_pull_threshold_90_36 = DecimalParameter(1.5, 3.0, default=1.75, space='buy', decimals=2, optimize=False, load=True)
-    buy_pump_threshold_90_36 = DecimalParameter(0.4, 1.0, default=0.69, space='buy', decimals=3, optimize=False, load=True)
+    buy_pump_pull_threshold_90_36 = 1.75
+    buy_pump_threshold_90_36 = 0.69
     # 48 hours - level 90
-    buy_pump_pull_threshold_90_48 = DecimalParameter(1.5, 3.0, default=1.75, space='buy', decimals=2, optimize=False, load=True)
-    buy_pump_threshold_90_48 = DecimalParameter(0.8, 1.2, default=1.1, space='buy', decimals=3, optimize=False, load=True)
+    buy_pump_pull_threshold_90_48 = 1.75
+    buy_pump_threshold_90_48 = 1.1
 
     # 24 hours - level 100
-    buy_pump_pull_threshold_100_24 = DecimalParameter(1.5, 3.0, default=1.7, space='buy', decimals=2, optimize=False, load=True)
-    buy_pump_threshold_100_24 = DecimalParameter(0.4, 1.0, default=0.66, space='buy', decimals=3, optimize=False, load=True)
+    buy_pump_pull_threshold_100_24 = 1.7
+    buy_pump_threshold_100_24 = 0.66
     # 36 hours - level 100
-    buy_pump_pull_threshold_100_36 = DecimalParameter(1.5, 3.0, default=1.7, space='buy', decimals=2, optimize=False, load=True)
-    buy_pump_threshold_100_36 = DecimalParameter(0.4, 1.0, default=0.7, space='buy', decimals=3, optimize=False, load=True)
+    buy_pump_pull_threshold_100_36 = 1.7
+    buy_pump_threshold_100_36 = 0.7
     # 48 hours - level 100
-    buy_pump_pull_threshold_100_48 = DecimalParameter(1.3, 2.0, default=1.4, space='buy', decimals=2, optimize=False, load=True)
-    buy_pump_threshold_100_48 = DecimalParameter(0.4, 1.8, default=1.6, space='buy', decimals=3, optimize=False, load=True)
+    buy_pump_pull_threshold_100_48 = 1.4
+    buy_pump_threshold_100_48 = 1.6
 
     # 24 hours - level 110
-    buy_pump_pull_threshold_110_24 = DecimalParameter(1.5, 3.0, default=1.7, space='buy', decimals=2, optimize=False, load=True)
-    buy_pump_threshold_110_24 = DecimalParameter(0.4, 1.0, default=0.7, space='buy', decimals=3, optimize=False, load=True)
+    buy_pump_pull_threshold_110_24 = 1.7
+    buy_pump_threshold_110_24 = 0.7
     # 36 hours - level 110
-    buy_pump_pull_threshold_110_36 = DecimalParameter(1.5, 3.0, default=1.7, space='buy', decimals=2, optimize=False, load=True)
-    buy_pump_threshold_110_36 = DecimalParameter(0.4, 1.0, default=0.74, space='buy', decimals=3, optimize=False, load=True)
+    buy_pump_pull_threshold_110_36 = 1.7
+    buy_pump_threshold_110_36 = 0.74
     # 48 hours - level 110
-    buy_pump_pull_threshold_110_48 = DecimalParameter(1.3, 2.0, default=1.4, space='buy', decimals=2, optimize=False, load=True)
-    buy_pump_threshold_110_48 = DecimalParameter(1.4, 2.0, default=1.8, space='buy', decimals=3, optimize=False, load=True)
+    buy_pump_pull_threshold_110_48 = 1.4
+    buy_pump_threshold_110_48 = 1.8
 
     # 24 hours - level 120
-    buy_pump_pull_threshold_120_24 = DecimalParameter(1.5, 3.0, default=1.7, space='buy', decimals=2, optimize=False, load=True)
-    buy_pump_threshold_120_24 = DecimalParameter(0.4, 1.0, default=0.78, space='buy', decimals=3, optimize=False, load=True)
+    buy_pump_pull_threshold_120_24 = 1.7
+    buy_pump_threshold_120_24 = 0.78
     # 36 hours - level 120
-    buy_pump_pull_threshold_120_36 = DecimalParameter(1.5, 3.0, default=1.7, space='buy', decimals=2, optimize=False, load=True)
-    buy_pump_threshold_120_36 = DecimalParameter(0.4, 1.0, default=0.78, space='buy', decimals=3, optimize=False, load=True)
+    buy_pump_pull_threshold_120_36 = 1.7
+    buy_pump_threshold_120_36 = 0.78
     # 48 hours - level 120
-    buy_pump_pull_threshold_120_48 = DecimalParameter(1.3, 2.0, default=1.4, space='buy', decimals=2, optimize=False, load=True)
-    buy_pump_threshold_120_48 = DecimalParameter(1.4, 2.8, default=2.0, space='buy', decimals=3, optimize=False, load=True)
+    buy_pump_pull_threshold_120_48 = 1.4
+    buy_pump_threshold_120_48 = 2.0
 
     # 5 hours - level 10
-    buy_dump_protection_10_5 = DecimalParameter(0.3, 0.8, default=0.4, space='buy', decimals=2, optimize=False, load=True)
+    buy_dump_protection_10_5 = 0.4
 
     # 5 hours - level 20
-    buy_dump_protection_20_5 = DecimalParameter(0.3, 0.8, default=0.44, space='buy', decimals=2, optimize=False, load=True)
+    buy_dump_protection_20_5 = 0.44
 
     # 5 hours - level 30
-    buy_dump_protection_30_5 = DecimalParameter(0.3, 0.8, default=0.50, space='buy', decimals=2, optimize=False, load=True)
+    buy_dump_protection_30_5 = 0.50
 
     # 5 hours - level 40
-    buy_dump_protection_40_5 = DecimalParameter(0.3, 0.8, default=0.58, space='buy', decimals=2, optimize=False, load=True)
+    buy_dump_protection_40_5 = 0.58
 
     # 5 hours - level 50
-    buy_dump_protection_50_5 = DecimalParameter(0.3, 0.8, default=0.66, space='buy', decimals=2, optimize=False, load=True)
+    buy_dump_protection_50_5 = 0.66
 
     # 5 hours - level 60
-    buy_dump_protection_60_5 = DecimalParameter(0.3, 0.8, default=0.74, space='buy', decimals=2, optimize=False, load=True)
+    buy_dump_protection_60_5 = 0.74
 
-    buy_min_inc_1 = DecimalParameter(0.01, 0.05, default=0.022, space='buy', decimals=3, optimize=False, load=True)
-    buy_rsi_1h_min_1 = DecimalParameter(25.0, 40.0, default=20.0, space='buy', decimals=1, optimize=False, load=True)
-    buy_rsi_1h_max_1 = DecimalParameter(70.0, 90.0, default=84.0, space='buy', decimals=1, optimize=False, load=True)
-    buy_rsi_1 = DecimalParameter(20.0, 40.0, default=36.0, space='buy', decimals=1, optimize=False, load=True)
-    buy_mfi_1 = DecimalParameter(20.0, 40.0, default=50.0, space='buy', decimals=1, optimize=False, load=True)
-    buy_cti_1 = DecimalParameter(-0.99, -0.5, default=-0.88, space='buy', decimals=2, optimize=False, load=True)
+    buy_min_inc_1 = 0.022
+    buy_rsi_1h_min_1 = 20.0
+    buy_rsi_1h_max_1 = 84.0
+    buy_rsi_1 = 36.0
+    buy_mfi_1 = 50.0
+    buy_cti_1 = -0.92
 
-    buy_rsi_1h_min_2 = DecimalParameter(30.0, 40.0, default=32.0, space='buy', decimals=1, optimize=False, load=True)
-    buy_rsi_1h_max_2 = DecimalParameter(70.0, 95.0, default=84.0, space='buy', decimals=1, optimize=False, load=True)
-    buy_rsi_1h_diff_2 = DecimalParameter(30.0, 50.0, default=38.8, space='buy', decimals=1, optimize=False, load=True)
-    buy_mfi_2 = DecimalParameter(30.0, 56.0, default=49.0, space='buy', decimals=1, optimize=False, load=True)
-    buy_bb_offset_2 = DecimalParameter(0.97, 0.999, default=0.983, space='buy', decimals=3, optimize=False, load=True)
-    buy_volume_2 = DecimalParameter(0.6, 6.0, default=1.6, space='buy', decimals=1, optimize=False, load=True)
+    buy_rsi_1h_min_2 = 32.0
+    buy_rsi_1h_max_2 = 84.0
+    buy_rsi_1h_diff_2 = 38.8
+    buy_mfi_2 = 49.0
+    buy_bb_offset_2 = 0.983
+    buy_volume_2 = 1.6
 
-    buy_bb40_bbdelta_close_3 = DecimalParameter(0.005, 0.06, default=0.045, space='buy', optimize=False, load=True)
-    buy_bb40_closedelta_close_3 = DecimalParameter(0.01, 0.03, default=0.022, space='buy', optimize=False, load=True)
-    buy_bb40_tail_bbdelta_3 = DecimalParameter(0.15, 0.45, default=0.418, space='buy', optimize=False, load=True)
-    buy_ema_rel_3 = DecimalParameter(0.97, 0.999, default=0.986, space='buy', decimals=3, optimize=False, load=True)
-    buy_cti_3 = DecimalParameter(-0.99, -0.5, default=-0.9, space='buy', decimals=2, optimize=False, load=True)
+    buy_bb40_bbdelta_close_3 = 0.045
+    buy_bb40_closedelta_close_3 = 0.023
+    buy_bb40_tail_bbdelta_3 = 0.418
+    buy_ema_rel_3 = 0.986
+    buy_cti_3 = -0.5
 
-    buy_bb20_close_bblowerband_4 = DecimalParameter(0.96, 0.99, default=0.976, space='buy', optimize=False, load=True)
-    buy_bb20_volume_4 = DecimalParameter(1.0, 20.0, default=3.0, space='buy', decimals=2, optimize=False, load=True)
+    buy_bb20_close_bblowerband_4 = 0.979
+    buy_bb20_volume_4 = 10.0
+    buy_cti_4 = -0.8
 
-    buy_ema_open_mult_5 = DecimalParameter(0.016, 0.03, default=0.018, space='buy', decimals=3, optimize=False, load=True)
-    buy_bb_offset_5 = DecimalParameter(0.98, 1.0, default=0.996, space='buy', decimals=3, optimize=False, load=True)
-    buy_ema_rel_5 = DecimalParameter(0.97, 0.999, default=0.944, space='buy', decimals=3, optimize=False, load=True)
-    buy_cti_5 = DecimalParameter(-0.99, -0.5, default=-0.84, space='buy', decimals=2, optimize=False, load=True)
-    buy_volume_5 = DecimalParameter(0.6, 6.0, default=1.9, space='buy', decimals=1, optimize=False, load=True)
+    buy_ema_open_mult_5 = 0.018
+    buy_bb_offset_5 = 0.996
+    buy_ema_rel_5 = 0.915
+    buy_cti_5 = -0.84
+    buy_volume_5 = 1.8
 
-    buy_ema_open_mult_6 = DecimalParameter(0.02, 0.03, default=0.021, space='buy', decimals=3, optimize=False, load=True)
-    buy_bb_offset_6 = DecimalParameter(0.98, 0.999, default=0.984, space='buy', decimals=3, optimize=False, load=True)
+    buy_ema_open_mult_6 = 0.021
+    buy_bb_offset_6 = 0.976
 
-    buy_ema_open_mult_7 = DecimalParameter(0.02, 0.04, default=0.031, space='buy', decimals=3, optimize=False, load=True)
-    buy_cti_7 = DecimalParameter(-0.99, -0.5, default=-0.89, space='buy', decimals=2, optimize=False, load=True)
+    buy_ema_open_mult_7 = 0.030
+    buy_cti_7 = -0.89
 
-    buy_cti_8 = DecimalParameter(-0.99, -0.5, default=-0.77, space='buy', decimals=2, optimize=False, load=True)
-    buy_rsi_8 = DecimalParameter(20.0, 50.0, default=40.0, space='buy', decimals=1, optimize=False, load=True)
-    buy_bb_offset_8 = DecimalParameter(0.98, 1.0, default=0.986, space='buy', decimals=3, optimize=False, load=True)
-    buy_rsi_1h_8 = DecimalParameter(40.0, 66.0, default=54.0, space='buy', decimals=1, optimize=False, load=True)
-    buy_volume_8 = DecimalParameter(0.6, 6.0, default=1.8, space='buy', decimals=1, optimize=False, load=True)
+    buy_cti_8 = -0.88
+    buy_rsi_8 = 40.0
+    buy_bb_offset_8 = 0.99
+    buy_rsi_1h_8 = 64.0
+    buy_volume_8 = 1.8
 
-    buy_ma_offset_9 = DecimalParameter(0.91, 0.94, default=0.922, space='buy', decimals=3, optimize=False, load=True)
-    buy_bb_offset_9 = DecimalParameter(0.96, 0.98, default=0.942, space='buy', decimals=3, optimize=False, load=True)
-    buy_rsi_1h_min_9 = DecimalParameter(26.0, 40.0, default=20.0, space='buy', decimals=1, optimize=False, load=True)
-    buy_rsi_1h_max_9 = DecimalParameter(70.0, 90.0, default=88.0, space='buy', decimals=1, optimize=False, load=True)
-    buy_mfi_9 = DecimalParameter(36.0, 56.0, default=50.0, space='buy', decimals=1, optimize=False, load=True)
+    buy_ma_offset_9 = 0.968
+    buy_bb_offset_9 = 0.942
+    buy_rsi_1h_min_9 = 20.0
+    buy_rsi_1h_max_9 = 88.0
+    buy_mfi_9 = 50.0
 
-    buy_ma_offset_10 = DecimalParameter(0.93, 0.97, default=0.948, space='buy', decimals=3, optimize=False, load=True)
-    buy_bb_offset_10 = DecimalParameter(0.97, 0.99, default=0.985, space='buy', decimals=3, optimize=False, load=True)
-    buy_rsi_1h_10 = DecimalParameter(20.0, 40.0, default=37.0, space='buy', decimals=1, optimize=False, load=True)
+    buy_ma_offset_10 = 0.98
+    buy_bb_offset_10 = 0.972
+    buy_rsi_1h_10 = 50.0
 
-    buy_ma_offset_11 = DecimalParameter(0.93, 0.99, default=0.934, space='buy', decimals=3, optimize=False, load=True)
-    buy_min_inc_11 = DecimalParameter(0.005, 0.05, default=0.02, space='buy', decimals=3, optimize=False, load=True)
-    buy_rsi_1h_min_11 = DecimalParameter(40.0, 60.0, default=55.0, space='buy', decimals=1, optimize=False, load=True)
-    buy_rsi_1h_max_11 = DecimalParameter(70.0, 90.0, default=84.0, space='buy', decimals=1, optimize=False, load=True)
-    buy_rsi_11 = DecimalParameter(34.0, 50.0, default=44.0, space='buy', decimals=1, optimize=False, load=True)
-    buy_mfi_11 = DecimalParameter(30.0, 46.0, default=36.0, space='buy', decimals=1, optimize=False, load=True)
+    buy_ma_offset_11 = 0.946
+    buy_min_inc_11 = 0.038
+    buy_rsi_1h_min_11 = 46.0
+    buy_rsi_1h_max_11 = 84.0
+    buy_rsi_11 = 38.0
+    buy_mfi_11 = 36.0
 
-    buy_ma_offset_12 = DecimalParameter(0.93, 0.97, default=0.907, space='buy', decimals=3, optimize=False, load=True)
-    buy_rsi_12 = DecimalParameter(26.0, 40.0, default=34.0, space='buy', decimals=1, optimize=False, load=True)
-    buy_ewo_12 = DecimalParameter(1.0, 6.0, default=1.8, space='buy', decimals=1, optimize=False, load=True)
+    buy_ma_offset_12 = 0.921
+    buy_rsi_12 = 28.0
+    buy_ewo_12 = 1.8
+    buy_cti_12 = -0.7
 
-    buy_ma_offset_13 = DecimalParameter(0.93, 0.98, default=0.99, space='buy', decimals=3, optimize=False, load=True)
-    buy_cti_13 = DecimalParameter(-0.99, -0.5, default=-0.74, space='buy', decimals=2, optimize=False, load=True)
-    buy_ewo_13 = DecimalParameter(-14.0, -7.0, default=-9.6, space='buy', decimals=1, optimize=False, load=True)
+    buy_13_ma_offset = 0.99
+    buy_13_cti = -0.82
+    buy_13_ewo = -6.5
+    buy_13_r_1h = -78.0
 
-    buy_ema_open_mult_14 = DecimalParameter(0.01, 0.03, default=0.014, space='buy', decimals=3, optimize=False, load=True)
-    buy_bb_offset_14 = DecimalParameter(0.98, 1.0, default=0.988, space='buy', decimals=3, optimize=False, load=True)
-    buy_ma_offset_14 = DecimalParameter(0.93, 0.99, default=0.98, space='buy', decimals=3, optimize=False, load=True)
-    buy_cti_14 = DecimalParameter(-0.99, -0.5, default=-0.86, space='buy', decimals=2, optimize=False, load=True)
+    buy_ema_open_mult_14 = 0.014
+    buy_bb_offset_14 = 0.988
+    buy_ma_offset_14 = 0.945
+    buy_cti_14 = -0.86
 
-    buy_ema_open_mult_15 = DecimalParameter(0.01, 0.03, default=0.024, space='buy', decimals=3, optimize=False, load=True)
-    buy_ma_offset_15 = DecimalParameter(0.93, 0.99, default=0.968, space='buy', decimals=3, optimize=False, load=True)
-    buy_rsi_15 = DecimalParameter(20.0, 36.0, default=28.0, space='buy', decimals=1, optimize=False, load=True)
-    buy_ema_rel_15 = DecimalParameter(0.97, 0.999, default=0.978, space='buy', decimals=3, optimize=False, load=True)
+    buy_ema_open_mult_15 = 0.024
+    buy_ma_offset_15 = 0.958
+    buy_rsi_15 = 28.0
+    buy_ema_rel_15 = 0.974
 
-    buy_ma_offset_16 = DecimalParameter(0.93, 0.97, default=0.952, space='buy', decimals=3, optimize=False, load=True)
-    buy_rsi_16 = DecimalParameter(26.0, 50.0, default=31.0, space='buy', decimals=1, optimize=False, load=True)
-    buy_ewo_16 = DecimalParameter(2.0, 6.0, default=2.8, space='buy', decimals=1, optimize=False, load=True)
-    buy_cti_16 = DecimalParameter(-0.99, -0.5, default=-0.84, space='buy', decimals=2, optimize=False, load=True)
+    buy_ma_offset_16 = 0.953
+    buy_rsi_16 = 31.0
+    buy_ewo_16 = 2.8
+    buy_cti_16 = -0.84
 
-    buy_ma_offset_17 = DecimalParameter(0.93, 0.98, default=0.952, space='buy', decimals=3, optimize=False, load=True)
-    buy_ewo_17 = DecimalParameter(-18.0, -10.0, default=-12.4, space='buy', decimals=1, optimize=False, load=True)
-    buy_cti_17 = DecimalParameter(-0.99, -0.5, default=-0.92, space='buy', decimals=2, optimize=False, load=True)
-    buy_volume_17 = DecimalParameter(0.6, 6.0, default=2.0, space='buy', decimals=1, optimize=False, load=True)
+    buy_17_ma_offset = 0.99
+    buy_17_ewo = -9.6
+    buy_17_cti = -0.96
+    buy_17_cti_1h = -0.92
+    buy_17_r_1h = -20.0
+    buy_17_volume = 2.0
 
-    buy_rsi_18 = DecimalParameter(16.0, 32.0, default=26.0, space='buy', decimals=1, optimize=False, load=True)
-    buy_bb_offset_18 = DecimalParameter(0.98, 1.0, default=0.982, space='buy', decimals=3, optimize=False, load=True)
-    buy_volume_18 = DecimalParameter(0.6, 6.0, default=2.0, space='buy', decimals=1, optimize=False, load=True)
+    buy_rsi_18 = 33.0
+    buy_bb_offset_18 = 0.986
+    buy_volume_18 = 2.0
+    buy_cti_18 = -0.86
 
-    buy_rsi_1h_min_19 = DecimalParameter(40.0, 70.0, default=50.0, space='buy', decimals=1, optimize=False, load=True)
-    buy_chop_min_19 = DecimalParameter(20.0, 60.0, default=23.0, space='buy', decimals=1, optimize=False, load=True)
+    buy_rsi_1h_min_19 = 30.0
+    buy_chop_max_19 = 21.3
 
-    buy_rsi_20 = DecimalParameter(20.0, 36.0, default=30.0, space='buy', decimals=1, optimize=False, load=True)
-    buy_rsi_1h_20 = DecimalParameter(14.0, 30.0, default=16.0, space='buy', decimals=1, optimize=False, load=True)
-    buy_cti_20 = DecimalParameter(-0.99, -0.5, default=-0.8, space='buy', decimals=2, optimize=False, load=True)
-    buy_volume_20 = DecimalParameter(0.6, 6.0, default=2.0, space='buy', decimals=1, optimize=False, load=True)
+    buy_rsi_20 = 36.0
+    buy_rsi_1h_20 = 16.0
+    buy_cti_20 = -0.84
+    buy_volume_20 = 2.0
 
-    buy_rsi_21 = DecimalParameter(10.0, 28.0, default=14.0, space='buy', decimals=1, optimize=False, load=True)
-    buy_rsi_1h_21 = DecimalParameter(18.0, 40.0, default=28.0, space='buy', decimals=1, optimize=False, load=True)
-    buy_cti_21 = DecimalParameter(-0.99, -0.4, default=-0.9, space='buy', decimals=2, optimize=False, load=True)
-    buy_volume_21 = DecimalParameter(0.6, 6.0, default=2.0, space='buy', decimals=1, optimize=False, load=True)
+    buy_rsi_21 = 14.0
+    buy_rsi_1h_21 = 28.0
+    buy_cti_21 = -0.902
+    buy_volume_21 = 2.0
 
-    buy_volume_22 = DecimalParameter(0.5, 6.0, default=2.0, space='buy', decimals=1, optimize=False, load=True)
-    buy_bb_offset_22 = DecimalParameter(0.98, 1.0, default=0.984, space='buy', decimals=3, optimize=False, load=True)
-    buy_ma_offset_22 = DecimalParameter(0.93, 0.98, default=0.946, space='buy', decimals=3, optimize=False, load=True)
-    buy_ewo_22 = DecimalParameter(2.0, 10.0, default=6.2, space='buy', decimals=1, optimize=False, load=True)
-    buy_rsi_22 = DecimalParameter(26.0, 56.0, default=37.0, space='buy', decimals=1, optimize=False, load=True)
+    buy_volume_22 = 2.0
+    buy_bb_offset_22 = 0.984
+    buy_ma_offset_22 = 0.942
+    buy_ewo_22 = 5.8
+    buy_rsi_22 = 36.0
 
-    buy_bb_offset_23 = DecimalParameter(0.97, 1.0, default=0.983, space='buy', decimals=3, optimize=False, load=True)
-    buy_ewo_23 = DecimalParameter(2.0, 10.0, default=7.0, space='buy', decimals=1, optimize=False, load=True)
-    buy_rsi_23 = DecimalParameter(20.0, 40.0, default=30.0, space='buy', decimals=1, optimize=False, load=True)
-    buy_rsi_1h_23 = DecimalParameter(60.0, 80.0, default=70.0, space='buy', decimals=1, optimize=False, load=True)
+    buy_23_bb_offset = 0.984
+    buy_23_ewo = 7.8
+    buy_23_rsi = 32.4
+    buy_23_rsi_1h = 80.0
+    buy_23_cti = -0.66
+    buy_23_r = -80.0
+    buy_23_r_1h = -80.0
 
-    buy_24_rsi_max = DecimalParameter(26.0, 60.0, default=50.0, space='buy', decimals=1, optimize=False, load=True)
-    buy_24_rsi_1h_min = DecimalParameter(40.0, 90.0, default=66.9, space='buy', decimals=1, optimize=False, load=True)
+    buy_24_rsi_max = 50.0
+    buy_24_rsi_1h_min = 66.9
 
-    buy_25_ma_offset = DecimalParameter(0.90, 0.99, default=0.922, space='buy', optimize=False, load=True)
-    buy_25_rsi_14 = DecimalParameter(26.0, 40.0, default=38.0, space='buy', decimals=1, optimize=False, load=True)
-    buy_25_cti = DecimalParameter(-0.99, -0.4, default=-0.6, space='buy', decimals=2, optimize=False, load=True)
+    buy_25_ma_offset = 0.922
+    buy_25_rsi_4 = 38.0
+    buy_25_cti = -0.76
 
-    buy_26_zema_low_offset = DecimalParameter(0.90, 0.99, default=0.93, space='buy', optimize=False, load=True)
+    buy_26_zema_low_offset = 0.94
+    buy_26_cti = -0.91
+    buy_26_r = -35.0
+    buy_26_r_1h = -60.0
+    buy_26_volume = 2.0
 
-    buy_27_wr_max = DecimalParameter(95, 99, default=99.0, space='buy', decimals=1, optimize=False, load=True)
-    buy_27_wr_1h_max = DecimalParameter(90, 99, default=97.6, space='buy', decimals=1, optimize=False, load=True)
-    buy_27_rsi_max = DecimalParameter(40, 70, default=50, space='buy', decimals=0, optimize=False, load=True)
-    buy_27_cti = DecimalParameter(-0.99, -0.4, default=-0.9, space='buy', decimals=2, optimize=False, load=True)
-    buy_27_volume = DecimalParameter(0.6, 6.0, default=2.0, space='buy', decimals=1, optimize=False, load=True)
+    buy_27_wr_max = 90.0
+    buy_27_wr_1h_max = 90.0
+    buy_27_rsi_max = 50
+    buy_27_cti = -0.93
+    buy_27_volume = 2.0
 
-    buy_28_ma_offset = DecimalParameter(0.90, 0.99, default=0.92, space='buy', optimize=False, load=True)
-    buy_28_ewo = DecimalParameter(2.0, 14.0, default=12.4, space='buy', decimals=1, optimize=False, load=True)
-    buy_28_rsi = DecimalParameter(24.0, 44.0, default=38.0, space='buy', decimals=1, optimize=False, load=True)
-    buy_28_cti = DecimalParameter(-0.99, -0.4, default=-0.6, space='buy', decimals=2, optimize=False, load=True)
+    buy_28_ma_offset = 0.97
+    buy_28_ewo = 7.2
+    buy_28_rsi = 32.5
+    buy_28_cti = -0.9
 
-    buy_29_ma_offset = DecimalParameter(0.90, 0.99, default=0.91, space='buy', optimize=False, load=True)
-    buy_29_ewo = DecimalParameter(-14.0, -2.0, default=-4.0, space='buy', decimals=1, optimize=False, load=True)
-    buy_29_cti = DecimalParameter(-0.99, -0.4, default=-0.82, space='buy', decimals=2, optimize=False, load=True)
+    buy_29_ma_offset = 0.94
+    buy_29_ewo = -4.0
+    buy_29_cti = -0.95
 
-    buy_30_ma_offset = DecimalParameter(0.90, 0.99, default=0.97, space='buy', optimize=False, load=True)
-    buy_30_ewo = DecimalParameter(2.0, 14.0, default=7.8, space='buy', decimals=1, optimize=False, load=True)
-    buy_30_rsi = DecimalParameter(24.0, 48.0, default=42.0, space='buy', decimals=1, optimize=False, load=True)
-    buy_30_cti = DecimalParameter(-0.99, -0.4, default=-0.8, space='buy', decimals=2, optimize=False, load=True)
+    buy_30_ma_offset = 0.97
+    buy_30_ewo = 7.4
+    buy_30_rsi = 40.0
+    buy_30_cti = -0.88
 
-    buy_31_ma_offset = DecimalParameter(0.90, 0.99, default=0.94, space='buy', optimize=False, load=True)
-    buy_31_ewo = DecimalParameter(-22.0, -8.0, default=-19.0, space='buy', decimals=1, optimize=False, load=True)
-    buy_31_wr = DecimalParameter(-99.9, -95.0, default=-98.4, space='buy', decimals=1, optimize=False, load=True)
+    buy_31_ma_offset = 0.962
+    buy_31_ewo = -10.4
+    buy_31_wr = -90.0
+    buy_31_cti = -0.898
 
-    buy_32_ma_offset = DecimalParameter(0.90, 0.99, default=0.946, space='buy', optimize=False, load=True)
-    buy_32_dip = DecimalParameter(0.001, 0.02, default=0.005, space='buy', decimals=3, optimize=False, load=True)
-    buy_32_rsi = DecimalParameter(24.0, 50.0, default=46.0, space='buy', decimals=1, optimize=False, load=True)
-    buy_32_cti = DecimalParameter(-0.99, -0.4, default=-0.8, space='buy', decimals=2, optimize=False, load=True)
+    buy_32_ma_offset = 0.948
+    buy_32_rsi = 46.0
+    buy_32_cti = -0.86
+    buy_32_cti_1h = -0.2
+    buy_32_r_480_1h = -48.0
+    buy_32_crsi_1h = 10.0
 
-    buy_33_ma_offset = DecimalParameter(0.90, 0.99, default=0.974, space='buy', optimize=False, load=True)
-    buy_33_rsi = DecimalParameter(24.0, 50.0, default=32.0, space='buy', decimals=1, optimize=False, load=True)
-    buy_33_cti = DecimalParameter(-0.99, -0.4, default=-0.9, space='buy', decimals=2, optimize=False, load=True)
-    buy_33_ewo = DecimalParameter(2.0, 14.0, default=9.0, space='buy', decimals=1, optimize=False, load=True)
-    buy_33_volume = DecimalParameter(0.6, 6.0, default=2.0, space='buy', decimals=1, optimize=False, load=True)
+    buy_33_ma_offset = 0.988
+    buy_33_rsi = 32.0
+    buy_33_cti = -0.88
+    buy_33_ewo = 6.4
+    buy_33_volume = 2.0
 
-    buy_34_ma_offset = DecimalParameter(0.90, 0.99, default=0.968, space='buy', optimize=False, load=True)
-    buy_34_dip = DecimalParameter(0.001, 0.02, default=0.002, space='buy', decimals=3, optimize=False, load=True)
-    buy_34_ewo = DecimalParameter(-24.0, -8.0, default=-20.0, space='buy', decimals=1, optimize=False, load=True)
-    buy_34_cti = DecimalParameter(-0.99, -0.4, default=-0.88, space='buy', decimals=2, optimize=False, load=True)
-    buy_34_volume = DecimalParameter(0.6, 6.0, default=1.1, space='buy', decimals=1, optimize=False, load=True)
+    buy_34_ma_offset = 0.93
+    buy_34_dip = 0.005
+    buy_34_ewo = -6.0
+    buy_34_cti = -0.88
+    buy_34_volume = 2.0
+
+    buy_35_ma_offset = 0.984
+    buy_35_ewo = 9.6
+    buy_35_rsi = 32.0
+    buy_35_cti = -0.5
+
+    buy_36_ma_offset = 0.98
+    buy_36_ewo = -8.8
+    buy_36_cti = -0.8
+
+    buy_37_ma_offset = 0.98
+    buy_37_ewo = 9.8
+    buy_37_rsi = 56.0
+    buy_37_cti = -0.7
+
+    buy_38_ma_offset = 0.98
+    buy_38_ewo = -5.2
+    buy_38_cti = -0.96
+
+    buy_39_cti = -0.77
+    buy_39_r = -60.0
+    buy_39_r_1h = -38.0
+
+    buy_40_hrsi = 30.0
+    buy_40_cci = -240.0
+    buy_40_rsi = 30.0
+    buy_40_cti = -0.8
+    buy_40_r = -90.0
+    buy_40_r_1h = -90.0
+
+    buy_41_cti_1h = -0.84
+    buy_41_r_1h = -42.0
+    buy_41_ma_offset = 0.96
+    buy_41_cti = -0.8
+    buy_41_r = -75.0
+
+    buy_42_cti_1h = 0.5
+    buy_42_r_1h = -46.0
+    buy_42_ema_open_mult = 0.018
+    buy_42_bb_offset = 0.992
+
+    buy_43_cti_1h = 0.5
+    buy_43_r_1h = -80.0
+    buy_43_bb40_bbdelta_close = 0.046
+    buy_43_bb40_closedelta_close = 0.02
+    buy_43_bb40_tail_bbdelta = 0.5
+    buy_43_cti = -0.6
+    buy_43_r = -90.0
+
+    buy_44_ma_offset = 0.982
+    buy_44_ewo = -18.0
+    buy_44_cti = -0.73
+    buy_44_crsi_1h = 10.0
 
     # Sell
 
-    sell_condition_1_enable = CategoricalParameter([True, False], default=True, space='sell', optimize=False, load=True)
-    sell_condition_2_enable = CategoricalParameter([True, False], default=True, space='sell', optimize=False, load=True)
-    sell_condition_3_enable = CategoricalParameter([True, False], default=True, space='sell', optimize=False, load=True)
-    sell_condition_4_enable = CategoricalParameter([True, False], default=True, space='sell', optimize=False, load=True)
-    sell_condition_5_enable = CategoricalParameter([True, False], default=True, space='sell', optimize=False, load=True)
-    sell_condition_6_enable = CategoricalParameter([True, False], default=True, space='sell', optimize=False, load=True)
-    sell_condition_7_enable = CategoricalParameter([True, False], default=True, space='sell', optimize=False, load=True)
-    sell_condition_8_enable = CategoricalParameter([True, False], default=True, space='sell', optimize=False, load=True)
+    sell_condition_1_enable = True
+    sell_condition_2_enable = True
+    sell_condition_3_enable = True
+    sell_condition_4_enable = True
+    sell_condition_5_enable = True
+    sell_condition_6_enable = True
+    sell_condition_7_enable = True
+    sell_condition_8_enable = True
 
     # 48h for pump sell checks
-    sell_pump_threshold_48_1 = DecimalParameter(0.5, 1.2, default=0.9, space='sell', decimals=2, optimize=False, load=True)
-    sell_pump_threshold_48_2 = DecimalParameter(0.4, 0.9, default=0.7, space='sell', decimals=2, optimize=False, load=True)
-    sell_pump_threshold_48_3 = DecimalParameter(0.3, 0.7, default=0.5, space='sell', decimals=2, optimize=False, load=True)
+    sell_pump_threshold_48_1 = 0.9
+    sell_pump_threshold_48_2 = 0.7
+    sell_pump_threshold_48_3 = 0.5
 
     # 36h for pump sell checks
-    sell_pump_threshold_36_1 = DecimalParameter(0.5, 0.9, default=0.72, space='sell', decimals=2, optimize=False, load=True)
-    sell_pump_threshold_36_2 = DecimalParameter(3.0, 6.0, default=4.0, space='sell', decimals=2, optimize=False, load=True)
-    sell_pump_threshold_36_3 = DecimalParameter(0.8, 1.6, default=1.0, space='sell', decimals=2, optimize=False, load=True)
+    sell_pump_threshold_36_1 = 0.72
+    sell_pump_threshold_36_2 = 4.0
+    sell_pump_threshold_36_3 = 1.0
 
     # 24h for pump sell checks
-    sell_pump_threshold_24_1 = DecimalParameter(0.5, 0.9, default=0.68, space='sell', decimals=2, optimize=False, load=True)
-    sell_pump_threshold_24_2 = DecimalParameter(0.3, 0.6, default=0.62, space='sell', decimals=2, optimize=False, load=True)
-    sell_pump_threshold_24_3 = DecimalParameter(0.2, 0.5, default=0.88, space='sell', decimals=2, optimize=False, load=True)
+    sell_pump_threshold_24_1 = 0.68
+    sell_pump_threshold_24_2 = 0.62
+    sell_pump_threshold_24_3 = 0.88
 
-    sell_rsi_bb_1 = DecimalParameter(60.0, 80.0, default=79.5, space='sell', decimals=1, optimize=False, load=True)
+    sell_rsi_bb_1 = 79.5
 
-    sell_rsi_bb_2 = DecimalParameter(72.0, 90.0, default=81, space='sell', decimals=1, optimize=False, load=True)
+    sell_rsi_bb_2 = 81
 
-    sell_rsi_main_3 = DecimalParameter(77.0, 90.0, default=82, space='sell', decimals=1, optimize=False, load=True)
+    sell_rsi_main_3 = 82
 
-    sell_dual_rsi_rsi_4 = DecimalParameter(72.0, 84.0, default=73.4, space='sell', decimals=1, optimize=False, load=True)
-    sell_dual_rsi_rsi_1h_4 = DecimalParameter(78.0, 92.0, default=79.6, space='sell', decimals=1, optimize=False, load=True)
+    sell_dual_rsi_rsi_4 = 73.4
+    sell_dual_rsi_rsi_1h_4 = 79.6
 
-    sell_ema_relative_5 = DecimalParameter(0.005, 0.05, default=0.024, space='sell', optimize=False, load=True)
-    sell_rsi_diff_5 = DecimalParameter(0.0, 20.0, default=4.4, space='sell', optimize=False, load=True)
+    sell_ema_relative_5 = 0.024
+    sell_rsi_diff_5 = 4.4
 
-    sell_rsi_under_6 = DecimalParameter(72.0, 90.0, default=79.0, space='sell', decimals=1, optimize=False, load=True)
+    sell_rsi_under_6 = 79.0
 
-    sell_rsi_1h_7 = DecimalParameter(80.0, 95.0, default=81.7, space='sell', decimals=1, optimize=False, load=True)
+    sell_rsi_1h_7 = 81.7
 
-    sell_bb_relative_8 = DecimalParameter(1.05, 1.3, default=1.1, space='sell', decimals=3, optimize=False, load=True)
+    sell_bb_relative_8 = 1.1
 
     # Profit over EMA200
-    sell_custom_profit_0 = DecimalParameter(0.01, 0.1, default=0.012, space='sell', decimals=3, optimize=False, load=True)
-    sell_custom_rsi_0 = DecimalParameter(30.0, 40.0, default=34.0, space='sell', decimals=3, optimize=False, load=True)
-    sell_custom_profit_1 = DecimalParameter(0.01, 0.1, default=0.02, space='sell', decimals=3, optimize=False, load=True)
-    sell_custom_rsi_1 = DecimalParameter(30.0, 50.0, default=35.0, space='sell', decimals=2, optimize=False, load=True)
-    sell_custom_profit_2 = DecimalParameter(0.01, 0.1, default=0.03, space='sell', decimals=3, optimize=False, load=True)
-    sell_custom_rsi_2 = DecimalParameter(30.0, 50.0, default=37.0, space='sell', decimals=2, optimize=False, load=True)
-    sell_custom_profit_3 = DecimalParameter(0.01, 0.1, default=0.04, space='sell', decimals=3, optimize=False, load=True)
-    sell_custom_rsi_3 = DecimalParameter(30.0, 50.0, default=42.0, space='sell', decimals=2, optimize=False, load=True)
-    sell_custom_profit_4 = DecimalParameter(0.01, 0.1, default=0.05, space='sell', decimals=3, optimize=False, load=True)
-    sell_custom_rsi_4 = DecimalParameter(35.0, 50.0, default=43.0, space='sell', decimals=2, optimize=False, load=True)
-    sell_custom_profit_5 = DecimalParameter(0.01, 0.1, default=0.06, space='sell', decimals=3, optimize=False, load=True)
-    sell_custom_rsi_5 = DecimalParameter(35.0, 50.0, default=45.0, space='sell', decimals=2, optimize=False, load=True)
-    sell_custom_profit_6 = DecimalParameter(0.01, 0.1, default=0.07, space='sell', decimals=3, optimize=False, load=True)
-    sell_custom_rsi_6 = DecimalParameter(38.0, 55.0, default=52.0, space='sell', decimals=2, optimize=False, load=True)
-    sell_custom_profit_7 = DecimalParameter(0.01, 0.1, default=0.08, space='sell', decimals=3, optimize=False, load=True)
-    sell_custom_rsi_7 = DecimalParameter(40.0, 58.0, default=54.0, space='sell', decimals=2, optimize=False, load=True)
-    sell_custom_profit_8 = DecimalParameter(0.06, 0.1, default=0.09, space='sell', decimals=3, optimize=False, load=True)
-    sell_custom_rsi_8 = DecimalParameter(40.0, 50.0, default=55.0, space='sell', decimals=2, optimize=False, load=True)
-    sell_custom_profit_9 = DecimalParameter(0.05, 0.14, default=0.1, space='sell', decimals=3, optimize=False, load=True)
-    sell_custom_rsi_9 = DecimalParameter(40.0, 60.0, default=54.0, space='sell', decimals=2, optimize=False, load=True)
-    sell_custom_profit_10 = DecimalParameter(0.1, 0.14, default=0.12, space='sell', decimals=3, optimize=False, load=True)
-    sell_custom_rsi_10 = DecimalParameter(38.0, 50.0, default=42.0, space='sell', decimals=2, optimize=False, load=True)
-    sell_custom_profit_11 = DecimalParameter(0.16, 0.45, default=0.20, space='sell', decimals=3, optimize=False, load=True)
-    sell_custom_rsi_11 = DecimalParameter(28.0, 40.0, default=34.0, space='sell', decimals=2, optimize=False, load=True)
+    sell_custom_profit_bull_0 = 0.012
+    sell_custom_rsi_under_bull_0 = 34.0
+    sell_custom_profit_bull_1 = 0.02
+    sell_custom_rsi_under_bull_1 = 35.0
+    sell_custom_profit_bull_2 = 0.03
+    sell_custom_rsi_under_bull_2 = 36.0
+    sell_custom_profit_bull_3 = 0.04
+    sell_custom_rsi_under_bull_3 = 37.0
+    sell_custom_profit_bull_4 = 0.05
+    sell_custom_rsi_under_bull_4 = 42.0
+    sell_custom_profit_bull_5 = 0.06
+    sell_custom_rsi_under_bull_5 = 49.0
+    sell_custom_profit_bull_6 = 0.07
+    sell_custom_rsi_under_bull_6 = 50.0
+    sell_custom_profit_bull_7 = 0.08
+    sell_custom_rsi_under_bull_7 = 54.0
+    sell_custom_profit_bull_8 = 0.09
+    sell_custom_rsi_under_bull_8 = 50.0
+    sell_custom_profit_bull_9 = 0.1
+    sell_custom_rsi_under_bull_9 = 46.0
+    sell_custom_profit_bull_10 = 0.12
+    sell_custom_rsi_under_bull_10 = 42.0
+    sell_custom_profit_bull_11 = 0.20
+    sell_custom_rsi_under_bull_11 = 30.0
+
+    sell_custom_profit_bear_0 = 0.012
+    sell_custom_rsi_under_bear_0 = 34.0
+    sell_custom_profit_bear_1 = 0.02
+    sell_custom_rsi_under_bear_1 = 35.0
+    sell_custom_profit_bear_2 = 0.03
+    sell_custom_rsi_under_bear_2 = 37.0
+    sell_custom_profit_bear_3 = 0.04
+    sell_custom_rsi_under_bear_3 = 44.0
+    sell_custom_profit_bear_4 = 0.05
+    sell_custom_rsi_under_bear_4 = 48.0
+    sell_custom_profit_bear_5 = 0.06
+    sell_custom_rsi_under_bear_5 = 50.0
+    sell_custom_rsi_over_bear_5 = 78.0
+    sell_custom_profit_bear_6 = 0.07
+    sell_custom_rsi_under_bear_6 = 52.0
+    sell_custom_rsi_over_bear_6 = 78.0
+    sell_custom_profit_bear_7 = 0.08
+    sell_custom_rsi_under_bear_7 = 54.0
+    sell_custom_rsi_over_bear_7 = 80.0
+    sell_custom_profit_bear_8 = 0.09
+    sell_custom_rsi_under_bear_8 = 52.0
+    sell_custom_rsi_over_bear_8 = 82.0
+    sell_custom_profit_bear_9 = 0.1
+    sell_custom_rsi_under_bear_9 = 46.0
+    sell_custom_profit_bear_10 = 0.12
+    sell_custom_rsi_under_bear_10 = 42.0
+    sell_custom_profit_bear_11 = 0.20
+    sell_custom_rsi_under_bear_11 = 30.0
 
     # Profit under EMA200
-    sell_custom_under_profit_0 = DecimalParameter(0.01, 0.4, default=0.01, space='sell', decimals=3, optimize=False, load=True)
-    sell_custom_under_rsi_0 = DecimalParameter(28.0, 40.0, default=38.0, space='sell', decimals=1, optimize=False, load=True)
-    sell_custom_under_profit_1 = DecimalParameter(0.01, 0.10, default=0.02, space='sell', decimals=3, optimize=False, load=True)
-    sell_custom_under_rsi_1 = DecimalParameter(36.0, 60.0, default=56.0, space='sell', decimals=1, optimize=False, load=True)
-    sell_custom_under_profit_2 = DecimalParameter(0.01, 0.10, default=0.03, space='sell', decimals=3, optimize=False, load=True)
-    sell_custom_under_rsi_2 = DecimalParameter(46.0, 66.0, default=57.0, space='sell', decimals=1, optimize=False, load=True)
-    sell_custom_under_profit_3 = DecimalParameter(0.01, 0.10, default=0.04, space='sell', decimals=3, optimize=False, load=True)
-    sell_custom_under_rsi_3 = DecimalParameter(50.0, 68.0, default=58.0, space='sell', decimals=1, optimize=False, load=True)
-    sell_custom_under_profit_4 = DecimalParameter(0.02, 0.1, default=0.05, space='sell', decimals=3, optimize=False, load=True)
-    sell_custom_under_rsi_4 = DecimalParameter(50.0, 68.0, default=59.0, space='sell', decimals=1, optimize=False, load=True)
-    sell_custom_under_profit_5 = DecimalParameter(0.02, 0.1, default=0.06, space='sell', decimals=3, optimize=False, load=True)
-    sell_custom_under_rsi_5 = DecimalParameter(46.0, 62.0, default=60.0, space='sell', decimals=1, optimize=False, load=True)
-    sell_custom_under_profit_6 = DecimalParameter(0.03, 0.1, default=0.07, space='sell', decimals=3, optimize=False, load=True)
-    sell_custom_under_rsi_6 = DecimalParameter(44.0, 60.0, default=56.0, space='sell', decimals=1, optimize=False, load=True)
-    sell_custom_under_profit_7 = DecimalParameter(0.04, 0.1, default=0.08, space='sell', decimals=3, optimize=False, load=True)
-    sell_custom_under_rsi_7 = DecimalParameter(46.0, 60.0, default=54.0, space='sell', decimals=1, optimize=False, load=True)
-    sell_custom_under_profit_8 = DecimalParameter(0.06, 0.12, default=0.09, space='sell', decimals=3, optimize=False, load=True)
-    sell_custom_under_rsi_8 = DecimalParameter(40.0, 58.0, default=55.0, space='sell', decimals=1, optimize=False, load=True)
-    sell_custom_under_profit_9 = DecimalParameter(0.08, 0.14, default=0.1, space='sell', decimals=3, optimize=False, load=True)
-    sell_custom_under_rsi_9 = DecimalParameter(40.0, 60.0, default=54.0, space='sell', decimals=1, optimize=False, load=True)
-    sell_custom_under_profit_10 = DecimalParameter(0.1, 0.16, default=0.12, space='sell', decimals=3, optimize=False, load=True)
-    sell_custom_under_rsi_10 = DecimalParameter(30.0, 50.0, default=42.0, space='sell', decimals=1, optimize=False, load=True)
-    sell_custom_under_profit_11 = DecimalParameter(0.16, 0.3, default=0.2, space='sell', decimals=3, optimize=False, load=True)
-    sell_custom_under_rsi_11 = DecimalParameter(24.0, 40.0, default=34.0, space='sell', decimals=1, optimize=False, load=True)
+    sell_custom_under_profit_bull_0 = 0.01
+    sell_custom_under_rsi_under_bull_0 = 38.0
+    sell_custom_under_profit_bull_1 = 0.02
+    sell_custom_under_rsi_under_bull_1 = 46.0
+    sell_custom_under_profit_bull_2 = 0.03
+    sell_custom_under_rsi_under_bull_2 = 47.0
+    sell_custom_under_profit_bull_3 = 0.04
+    sell_custom_under_rsi_under_bull_3 = 48.0
+    sell_custom_under_profit_bull_4 = 0.05
+    sell_custom_under_rsi_under_bull_4 = 49.0
+    sell_custom_under_profit_bull_5 = 0.06
+    sell_custom_under_rsi_under_bull_5 = 50.0
+    sell_custom_under_profit_bull_6 = 0.07
+    sell_custom_under_rsi_under_bull_6 = 52.0
+    sell_custom_under_profit_bull_7 = 0.08
+    sell_custom_under_rsi_under_bull_7 = 54.0
+    sell_custom_under_profit_bull_8 = 0.09
+    sell_custom_under_rsi_under_bull_8 = 50.0
+    sell_custom_under_profit_bull_9 = 0.1
+    sell_custom_under_rsi_under_bull_9 = 46.0
+    sell_custom_under_profit_bull_10 = 0.12
+    sell_custom_under_rsi_under_bull_10 = 42.0
+    sell_custom_under_profit_bull_11 = 0.2
+    sell_custom_under_rsi_under_bull_11 = 30.0
+
+    sell_custom_under_profit_bear_0 = 0.01
+    sell_custom_under_rsi_under_bear_0 = 38.0
+    sell_custom_under_profit_bear_1 = 0.02
+    sell_custom_under_rsi_under_bear_1 = 56.0
+    sell_custom_under_profit_bear_2 = 0.03
+    sell_custom_under_rsi_under_bear_2 = 57.0
+    sell_custom_under_profit_bear_3 = 0.04
+    sell_custom_under_rsi_under_bear_3 = 58.0
+    sell_custom_under_profit_bear_4 = 0.05
+    sell_custom_under_rsi_under_bear_4 = 57.0
+    sell_custom_under_profit_bear_5 = 0.06
+    sell_custom_under_rsi_under_bear_5 = 56.0
+    sell_custom_under_rsi_over_bear_5 = 78.0
+    sell_custom_under_profit_bear_6 = 0.07
+    sell_custom_under_rsi_under_bear_6 = 55.0
+    sell_custom_under_rsi_over_bear_6 = 78.0
+    sell_custom_under_profit_bear_7 = 0.08
+    sell_custom_under_rsi_under_bear_7 = 54.0
+    sell_custom_under_rsi_over_bear_7 = 80.0
+    sell_custom_under_profit_bear_8 = 0.09
+    sell_custom_under_rsi_under_bear_8 = 50.0
+    sell_custom_under_rsi_over_bear_8 = 82.0
+    sell_custom_under_profit_bear_9 = 0.1
+    sell_custom_under_rsi_under_bear_9 = 46.0
+    sell_custom_under_profit_bear_10 = 0.12
+    sell_custom_under_rsi_under_bear_10 = 42.0
+    sell_custom_under_profit_bear_11 = 0.2
+    sell_custom_under_rsi_under_bear_11 = 30.0
 
     # Profit targets for pumped pairs 48h 1
-    sell_custom_pump_profit_1_1 = DecimalParameter(0.01, 0.03, default=0.01, space='sell', decimals=3, optimize=False, load=True)
-    sell_custom_pump_rsi_1_1 = DecimalParameter(26.0, 40.0, default=34.0, space='sell', decimals=1, optimize=False, load=True)
-    sell_custom_pump_profit_1_2 = DecimalParameter(0.01, 0.6, default=0.02, space='sell', decimals=3, optimize=False, load=True)
-    sell_custom_pump_rsi_1_2 = DecimalParameter(36.0, 50.0, default=40.0, space='sell', decimals=1, optimize=False, load=True)
-    sell_custom_pump_profit_1_3 = DecimalParameter(0.02, 0.10, default=0.04, space='sell', decimals=3, optimize=False, load=True)
-    sell_custom_pump_rsi_1_3 = DecimalParameter(38.0, 50.0, default=42.0, space='sell', decimals=1, optimize=False, load=True)
-    sell_custom_pump_profit_1_4 = DecimalParameter(0.06, 0.12, default=0.1, space='sell', decimals=3, optimize=False, load=True)
-    sell_custom_pump_rsi_1_4 = DecimalParameter(36.0, 48.0, default=42.0, space='sell', decimals=1, optimize=False, load=True)
-    sell_custom_pump_profit_1_5 = DecimalParameter(0.14, 0.24, default=0.2, space='sell', decimals=3, optimize=False, load=True)
-    sell_custom_pump_rsi_1_5 = DecimalParameter(20.0, 40.0, default=34.0, space='sell', decimals=1, optimize=False, load=True)
+    sell_custom_pump_profit_1_1 = 0.01
+    sell_custom_pump_rsi_1_1 = 34.0
+    sell_custom_pump_profit_1_2 = 0.02
+    sell_custom_pump_rsi_1_2 = 40.0
+    sell_custom_pump_profit_1_3 = 0.04
+    sell_custom_pump_rsi_1_3 = 42.0
+    sell_custom_pump_profit_1_4 = 0.1
+    sell_custom_pump_rsi_1_4 = 34.0
+    sell_custom_pump_profit_1_5 = 0.2
+    sell_custom_pump_rsi_1_5 = 30.0
 
     # Profit targets for pumped pairs 36h 1
-    sell_custom_pump_profit_2_1 = DecimalParameter(0.01, 0.03, default=0.01, space='sell', decimals=3, optimize=False, load=True)
-    sell_custom_pump_rsi_2_1 = DecimalParameter(26.0, 40.0, default=34.0, space='sell', decimals=1, optimize=False, load=True)
-    sell_custom_pump_profit_2_2 = DecimalParameter(0.01, 0.6, default=0.02, space='sell', decimals=3, optimize=False, load=True)
-    sell_custom_pump_rsi_2_2 = DecimalParameter(36.0, 50.0, default=40.0, space='sell', decimals=1, optimize=False, load=True)
-    sell_custom_pump_profit_2_3 = DecimalParameter(0.02, 0.10, default=0.04, space='sell', decimals=3, optimize=False, load=True)
-    sell_custom_pump_rsi_2_3 = DecimalParameter(38.0, 50.0, default=40.0, space='sell', decimals=1, optimize=False, load=True)
-    sell_custom_pump_profit_2_4 = DecimalParameter(0.06, 0.12, default=0.1, space='sell', decimals=3, optimize=False, load=True)
-    sell_custom_pump_rsi_2_4 = DecimalParameter(36.0, 48.0, default=42.0, space='sell', decimals=1, optimize=False, load=True)
-    sell_custom_pump_profit_2_5 = DecimalParameter(0.14, 0.24, default=0.2, space='sell', decimals=3, optimize=False, load=True)
-    sell_custom_pump_rsi_2_5 = DecimalParameter(20.0, 40.0, default=34.0, space='sell', decimals=1, optimize=False, load=True)
+    sell_custom_pump_profit_2_1 = 0.01
+    sell_custom_pump_rsi_2_1 = 34.0
+    sell_custom_pump_profit_2_2 = 0.02
+    sell_custom_pump_rsi_2_2 = 40.0
+    sell_custom_pump_profit_2_3 = 0.04
+    sell_custom_pump_rsi_2_3 = 42.0
+    sell_custom_pump_profit_2_4 = 0.1
+    sell_custom_pump_rsi_2_4 = 34.0
+    sell_custom_pump_profit_2_5 = 0.2
+    sell_custom_pump_rsi_2_5 = 30.0
 
     # Profit targets for pumped pairs 24h 1
-    sell_custom_pump_profit_3_1 = DecimalParameter(0.01, 0.03, default=0.01, space='sell', decimals=3, optimize=False, load=True)
-    sell_custom_pump_rsi_3_1 = DecimalParameter(26.0, 40.0, default=34.0, space='sell', decimals=1, optimize=False, load=True)
-    sell_custom_pump_profit_3_2 = DecimalParameter(0.01, 0.6, default=0.02, space='sell', decimals=3, optimize=False, load=True)
-    sell_custom_pump_rsi_3_2 = DecimalParameter(34.0, 50.0, default=40.0, space='sell', decimals=1, optimize=False, load=True)
-    sell_custom_pump_profit_3_3 = DecimalParameter(0.02, 0.10, default=0.04, space='sell', decimals=3, optimize=False, load=True)
-    sell_custom_pump_rsi_3_3 = DecimalParameter(38.0, 50.0, default=40.0, space='sell', decimals=1, optimize=False, load=True)
-    sell_custom_pump_profit_3_4 = DecimalParameter(0.06, 0.12, default=0.1, space='sell', decimals=3, optimize=False, load=True)
-    sell_custom_pump_rsi_3_4 = DecimalParameter(36.0, 48.0, default=42.0, space='sell', decimals=1, optimize=False, load=True)
-    sell_custom_pump_profit_3_5 = DecimalParameter(0.14, 0.24, default=0.2, space='sell', decimals=3, optimize=False, load=True)
-    sell_custom_pump_rsi_3_5 = DecimalParameter(20.0, 40.0, default=34.0, space='sell', decimals=1, optimize=False, load=True)
+    sell_custom_pump_profit_3_1 = 0.01
+    sell_custom_pump_rsi_3_1 = 34.0
+    sell_custom_pump_profit_3_2 = 0.02
+    sell_custom_pump_rsi_3_2 = 40.0
+    sell_custom_pump_profit_3_3 = 0.04
+    sell_custom_pump_rsi_3_3 = 42.0
+    sell_custom_pump_profit_3_4 = 0.1
+    sell_custom_pump_rsi_3_4 = 34.0
+    sell_custom_pump_profit_3_5 = 0.2
+    sell_custom_pump_rsi_3_5 = 30.0
 
     # SMA descending
-    sell_custom_dec_profit_min_1 = DecimalParameter(0.01, 0.10, default=0.05, space='sell', decimals=3, optimize=False, load=True)
-    sell_custom_dec_profit_max_1 = DecimalParameter(0.06, 0.16, default=0.12, space='sell', decimals=3, optimize=False, load=True)
+    sell_custom_dec_profit_min_1 = 0.05
+    sell_custom_dec_profit_max_1 = 0.12
 
     # Under EMA100
-    sell_custom_dec_profit_min_2 = DecimalParameter(0.05, 0.12, default=0.07, space='sell', decimals=3, optimize=False, load=True)
-    sell_custom_dec_profit_max_2 = DecimalParameter(0.06, 0.2, default=0.16, space='sell', decimals=3, optimize=False, load=True)
+    sell_custom_dec_profit_min_2 = 0.07
+    sell_custom_dec_profit_max_2 = 0.16
 
     # Trail 1
-    sell_trail_profit_min_1 = DecimalParameter(0.1, 0.2, default=0.03, space='sell', decimals=2, optimize=False, load=True)
-    sell_trail_profit_max_1 = DecimalParameter(0.4, 0.7, default=0.05, space='sell', decimals=2, optimize=False, load=True)
-    sell_trail_down_1 = DecimalParameter(0.01, 0.08, default=0.05, space='sell', decimals=3, optimize=False, load=True)
-    sell_trail_rsi_min_1 = DecimalParameter(16.0, 36.0, default=10.0, space='sell', decimals=1, optimize=False, load=True)
-    sell_trail_rsi_max_1 = DecimalParameter(30.0, 50.0, default=20.0, space='sell', decimals=1, optimize=False, load=True)
+    sell_trail_profit_min_1 = 0.03
+    sell_trail_profit_max_1 = 0.05
+    sell_trail_down_1 = 0.05
+    sell_trail_rsi_min_1 = 10.0
+    sell_trail_rsi_max_1 = 20.0
 
     # Trail 2
-    sell_trail_profit_min_2 = DecimalParameter(0.08, 0.16, default=0.1, space='sell', decimals=3, optimize=False, load=True)
-    sell_trail_profit_max_2 = DecimalParameter(0.3, 0.5, default=0.4, space='sell', decimals=2, optimize=False, load=True)
-    sell_trail_down_2 = DecimalParameter(0.02, 0.08, default=0.03, space='sell', decimals=3, optimize=False, load=True)
-    sell_trail_rsi_min_2 = DecimalParameter(16.0, 36.0, default=20.0, space='sell', decimals=1, optimize=False, load=True)
-    sell_trail_rsi_max_2 = DecimalParameter(30.0, 50.0, default=50.0, space='sell', decimals=1, optimize=False, load=True)
+    sell_trail_profit_min_2 = 0.1
+    sell_trail_profit_max_2 = 0.4
+    sell_trail_down_2 = 0.03
+    sell_trail_rsi_min_2 = 20.0
+    sell_trail_rsi_max_2 = 50.0
 
     # Trail 3
-    sell_trail_profit_min_3 = DecimalParameter(0.01, 0.12, default=0.06, space='sell', decimals=3, optimize=False, load=True)
-    sell_trail_profit_max_3 = DecimalParameter(0.1, 0.3, default=0.2, space='sell', decimals=2, optimize=False, load=True)
-    sell_trail_down_3 = DecimalParameter(0.01, 0.06, default=0.05, space='sell', decimals=3, optimize=False, load=True)
+    sell_trail_profit_min_3 = 0.06
+    sell_trail_profit_max_3 = 0.2
+    sell_trail_down_3 = 0.05
 
     # Trail 4
-    sell_trail_profit_min_4 = DecimalParameter(0.01, 0.12, default=0.03, space='sell', decimals=3, optimize=False, load=True)
-    sell_trail_profit_max_4 = DecimalParameter(0.02, 0.1, default=0.06, space='sell', decimals=2, optimize=False, load=True)
-    sell_trail_down_4 = DecimalParameter(0.01, 0.06, default=0.02, space='sell', decimals=3, optimize=False, load=True)
+    sell_trail_profit_min_4 = 0.03
+    sell_trail_profit_max_4 = 0.06
+    sell_trail_down_4 = 0.02
 
     # Under & near EMA200, accept profit
-    sell_custom_profit_under_profit_min_1 = DecimalParameter(0.0, 0.01, default=0.0, space='sell', optimize=False, load=True)
-    sell_custom_profit_under_profit_max_1 = DecimalParameter(0.0, 0.05, default=0.02, space='sell', optimize=False, load=True)
-    sell_custom_profit_under_rel_1 = DecimalParameter(0.01, 0.04, default=0.024, space='sell', optimize=False, load=True)
-    sell_custom_profit_under_rsi_diff_1 = DecimalParameter(0.0, 20.0, default=4.4, space='sell', optimize=False, load=True)
+    sell_custom_profit_under_profit_min_1 = 0.001
+    sell_custom_profit_under_profit_max_1 = 0.008
+    sell_custom_profit_under_rel_1 = 0.024
+    sell_custom_profit_under_rsi_diff_1 = 4.4
 
-    sell_custom_profit_under_profit_2 = DecimalParameter(0.0, 0.05, default=0.03, space='sell', optimize=False, load=True)
-    sell_custom_profit_under_rel_2 = DecimalParameter(0.01, 0.04, default=0.024, space='sell', optimize=False, load=True)
-    sell_custom_profit_under_rsi_diff_2 = DecimalParameter(0.0, 20.0, default=4.4, space='sell', optimize=False, load=True)
+    sell_custom_profit_under_profit_2 = 0.03
+    sell_custom_profit_under_rel_2 = 0.024
+    sell_custom_profit_under_rsi_diff_2 = 4.4
 
     # Under & near EMA200, take the loss
-    sell_custom_stoploss_under_rel_1 = DecimalParameter(0.001, 0.02, default=0.002, space='sell', optimize=False, load=True)
-    sell_custom_stoploss_under_rsi_diff_1 = DecimalParameter(0.0, 20.0, default=10.0, space='sell', optimize=False, load=True)
+    sell_custom_stoploss_under_rel_1 = 0.002
+    sell_custom_stoploss_under_rsi_diff_1 = 10.0
 
     # Long duration/recover stoploss 1
-    sell_custom_stoploss_long_profit_min_1 = DecimalParameter(-0.1, -0.02, default=-0.08, space='sell', optimize=False, load=True)
-    sell_custom_stoploss_long_profit_max_1 = DecimalParameter(-0.06, -0.01, default=-0.04, space='sell', optimize=False, load=True)
-    sell_custom_stoploss_long_recover_1 = DecimalParameter(0.05, 0.15, default=0.14, space='sell', optimize=False, load=True)
-    sell_custom_stoploss_long_rsi_diff_1 = DecimalParameter(0.0, 20.0, default=4.0, space='sell', optimize=False, load=True)
+    sell_custom_stoploss_long_profit_min_1 = -0.08
+    sell_custom_stoploss_long_profit_max_1 = -0.04
+    sell_custom_stoploss_long_recover_1 = 0.14
+    sell_custom_stoploss_long_rsi_diff_1 = 4.0
 
     # Long duration/recover stoploss 2
-    sell_custom_stoploss_long_recover_2 = DecimalParameter(0.03, 0.15, default=0.06, space='sell', optimize=False, load=True)
-    sell_custom_stoploss_long_rsi_diff_2 = DecimalParameter(30.0, 50.0, default=40.0, space='sell', optimize=False, load=True)
+    sell_custom_stoploss_long_recover_2 = 0.06
+    sell_custom_stoploss_long_rsi_diff_2 = 40.0
 
     # Pumped, descending SMA
-    sell_custom_pump_dec_profit_min_1 = DecimalParameter(0.001, 0.04, default=0.005, space='sell', decimals=3, optimize=False, load=True)
-    sell_custom_pump_dec_profit_max_1 = DecimalParameter(0.03, 0.08, default=0.05, space='sell', decimals=3, optimize=False, load=True)
-    sell_custom_pump_dec_profit_min_2 = DecimalParameter(0.01, 0.08, default=0.04, space='sell', decimals=3, optimize=False, load=True)
-    sell_custom_pump_dec_profit_max_2 = DecimalParameter(0.04, 0.1, default=0.06, space='sell', decimals=3, optimize=False, load=True)
-    sell_custom_pump_dec_profit_min_3 = DecimalParameter(0.02, 0.1, default=0.06, space='sell', decimals=3, optimize=False, load=True)
-    sell_custom_pump_dec_profit_max_3 = DecimalParameter(0.06, 0.12, default=0.09, space='sell', decimals=3, optimize=False, load=True)
-    sell_custom_pump_dec_profit_min_4 = DecimalParameter(0.01, 0.05, default=0.02, space='sell', decimals=3, optimize=False, load=True)
-    sell_custom_pump_dec_profit_max_4 = DecimalParameter(0.02, 0.1, default=0.04, space='sell', decimals=3, optimize=False, load=True)
+    sell_custom_pump_dec_profit_min_1 = 0.005
+    sell_custom_pump_dec_profit_max_1 = 0.05
+    sell_custom_pump_dec_profit_min_2 = 0.04
+    sell_custom_pump_dec_profit_max_2 = 0.06
+    sell_custom_pump_dec_profit_min_3 = 0.06
+    sell_custom_pump_dec_profit_max_3 = 0.09
+    sell_custom_pump_dec_profit_min_4 = 0.02
+    sell_custom_pump_dec_profit_max_4 = 0.04
 
     # Pumped 48h 1, under EMA200
-    sell_custom_pump_under_profit_min_1 = DecimalParameter(0.02, 0.06, default=0.04, space='sell', decimals=3, optimize=False, load=True)
-    sell_custom_pump_under_profit_max_1 = DecimalParameter(0.04, 0.1, default=0.09, space='sell', decimals=3, optimize=False, load=True)
+    sell_custom_pump_under_profit_min_1 = 0.04
+    sell_custom_pump_under_profit_max_1 = 0.09
 
     # Pumped trail 1
-    sell_custom_pump_trail_profit_min_1 = DecimalParameter(0.01, 0.12, default=0.05, space='sell', decimals=3, optimize=False, load=True)
-    sell_custom_pump_trail_profit_max_1 = DecimalParameter(0.06, 0.16, default=0.07, space='sell', decimals=2, optimize=False, load=True)
-    sell_custom_pump_trail_down_1 = DecimalParameter(0.01, 0.06, default=0.05, space='sell', decimals=3, optimize=False, load=True)
-    sell_custom_pump_trail_rsi_min_1 = DecimalParameter(16.0, 36.0, default=20.0, space='sell', decimals=1, optimize=False, load=True)
-    sell_custom_pump_trail_rsi_max_1 = DecimalParameter(30.0, 50.0, default=70.0, space='sell', decimals=1, optimize=False, load=True)
+    sell_custom_pump_trail_profit_min_1 = 0.05
+    sell_custom_pump_trail_profit_max_1 = 0.07
+    sell_custom_pump_trail_down_1 = 0.05
+    sell_custom_pump_trail_rsi_min_1 = 20.0
+    sell_custom_pump_trail_rsi_max_1 = 70.0
 
     # Stoploss, pumped, 48h 1
-    sell_custom_stoploss_pump_max_profit_1 = DecimalParameter(0.01, 0.04, default=0.01, space='sell', decimals=3, optimize=False, load=True)
-    sell_custom_stoploss_pump_min_1 = DecimalParameter(-0.1, -0.01, default=-0.02, space='sell', decimals=3, optimize=False, load=True)
-    sell_custom_stoploss_pump_max_1 = DecimalParameter(-0.1, -0.01, default=-0.01, space='sell', decimals=3, optimize=False, load=True)
-    sell_custom_stoploss_pump_ma_offset_1 = DecimalParameter(0.7, 0.99, default=0.94, space='sell', decimals=2, optimize=False, load=True)
+    sell_custom_stoploss_pump_max_profit_1 = 0.01
+    sell_custom_stoploss_pump_min_1 = -0.02
+    sell_custom_stoploss_pump_max_1 = -0.01
+    sell_custom_stoploss_pump_ma_offset_1 = 0.94
 
     # Stoploss, pumped, 48h 1
-    sell_custom_stoploss_pump_max_profit_2 = DecimalParameter(0.01, 0.04, default=0.025, space='sell', decimals=3, optimize=False, load=True)
-    sell_custom_stoploss_pump_loss_2 = DecimalParameter(-0.1, -0.01, default=-0.05, space='sell', decimals=3, optimize=False, load=True)
-    sell_custom_stoploss_pump_ma_offset_2 = DecimalParameter(0.7, 0.99, default=0.92, space='sell', decimals=2, optimize=False, load=True)
+    sell_custom_stoploss_pump_max_profit_2 = 0.025
+    sell_custom_stoploss_pump_loss_2 = -0.05
+    sell_custom_stoploss_pump_ma_offset_2 = 0.92
 
     # Stoploss, pumped, 36h 3
-    sell_custom_stoploss_pump_max_profit_3 = DecimalParameter(0.01, 0.04, default=0.008, space='sell', decimals=3, optimize=False, load=True)
-    sell_custom_stoploss_pump_loss_3 = DecimalParameter(-0.16, -0.06, default=-0.12, space='sell', decimals=3, optimize=False, load=True)
-    sell_custom_stoploss_pump_ma_offset_3 = DecimalParameter(0.7, 0.99, default=0.88, space='sell', decimals=2, optimize=False, load=True)
+    sell_custom_stoploss_pump_max_profit_3 = 0.008
+    sell_custom_stoploss_pump_loss_3 = -0.12
+    sell_custom_stoploss_pump_ma_offset_3 = 0.88
 
     # Recover
-    sell_custom_recover_profit_1 = DecimalParameter(0.01, 0.06, default=0.06, space='sell', decimals=3, optimize=False, load=True)
-    sell_custom_recover_min_loss_1 = DecimalParameter(0.06, 0.16, default=0.12, space='sell', decimals=3, optimize=False, load=True)
+    sell_custom_recover_profit_1 = 0.06
+    sell_custom_recover_min_loss_1 = 0.12
 
-    sell_custom_recover_profit_min_2 = DecimalParameter(0.01, 0.04, default=0.01, space='sell', decimals=3, optimize=False, load=True)
-    sell_custom_recover_profit_max_2 = DecimalParameter(0.02, 0.08, default=0.05, space='sell', decimals=3, optimize=False, load=True)
-    sell_custom_recover_min_loss_2 = DecimalParameter(0.04, 0.16, default=0.06, space='sell', decimals=3, optimize=False, load=True)
-    sell_custom_recover_rsi_2 = DecimalParameter(32.0, 52.0, default=46.0, space='sell', decimals=1, optimize=False, load=True)
+    sell_custom_recover_profit_min_2 = 0.01
+    sell_custom_recover_profit_max_2 = 0.05
+    sell_custom_recover_min_loss_2 = 0.06
+    sell_custom_recover_rsi_2 = 46.0
 
     # Profit for long duration trades
-    sell_custom_long_profit_min_1 = DecimalParameter(0.01, 0.04, default=0.03, space='sell', decimals=3, optimize=False, load=True)
-    sell_custom_long_profit_max_1 = DecimalParameter(0.02, 0.08, default=0.04, space='sell', decimals=3, optimize=False, load=True)
-    sell_custom_long_duration_min_1 = IntParameter(700, 2000, default=900, space='sell', optimize=False, load=True)
+    sell_custom_long_profit_min_1 = 0.03
+    sell_custom_long_profit_max_1 = 0.04
+    sell_custom_long_duration_min_1 = 900
 
+    # Profit Target Signal
+    profit_target_1_enable = False
     #############################################################
 
-    hold_trade_ids = None
+    plot_config = {
+        'main_plot': {
+            'ema_12_1h': {
+                'color': 'rgba(200,200,100,0.4)',
+                'type': 'line'
+            },
+            'ema_15_1h': {
+                'color': 'rgba(200,180,100,0.4)',
+                'type': 'line'
+            },
+            'ema_20_1h': {
+                'color': 'rgba(200,160,100,0.4)',
+                'type': 'line'
+            },
+            'ema_25_1h': {
+                'color': 'rgba(200,140,100,0.4)',
+                'type': 'line'
+            },
+            'ema_26_1h': {
+                'color': 'rgba(200,120,100,0.4)',
+                'type': 'line'
+            },
+            'ema_35_1h': {
+                'color': 'rgba(200,100,100,0.4)',
+                'type': 'line'
+            },
+            'ema_50_1h': {
+                'color': 'rgba(200,80,100,0.4)',
+                'type': 'line'
+            },
+            'ema_100_1h': {
+                'color': 'rgba(200,60,100,0.4)',
+                'type': 'line'
+            },
+            'ema_200_1h': {
+                'color': 'rgba(200,40,100,0.4)',
+                'type': 'line'
+            },
+            'sma_200_1h': {
+                'color': 'rgba(150,20,100,0.4)',
+                'type': 'line'
+            },
+            'pm': {
+                'color': 'rgba(100,20,100,0.5)',
+                'type': 'line'
+            }
+        },
+        'subplots': {
+            'buy tag': {
+                'buy_tag': {'color': 'green'}
+            },
+            'RSI/BTC': {
+                'btc_not_downtrend_1h': {
+                    'color': 'yellow'
+                },
+                'btc_rsi_14_1h': {
+                    'color': 'green'
+                },
+                'rsi_14_1h': {
+                    'color': '#f41cd1',
+                    'type': 'line'
+                },
+                'crsi': {
+                    'color': 'blue',
+                    'type': 'line'
+                }
+            },
+            'pump': {
+                'cti_1h': {
+                    'color': 'pink'
+                },
+                'safe_pump_24_10_1h': {
+                    'color': '#481110',
+                    'type': 'line'
+                },
+                'safe_pump_24_20_1h': {
+                    'color': '#481C0',
+                    'type': 'line'
+                },
+                'safe_pump_24_30_1h': {
+                    'color': '#481130',
+                    'type': 'line'
+                },
+                'safe_pump_24_40_1h': {
+                    'color': '#481140',
+                    'type': 'line'
+                },
+                'safe_pump_24_50_1h': {
+                    'color': '#481150',
+                    'type': 'line'
+                },
+                'safe_pump_24_60_1h': {
+                    'color': '#481160',
+                    'type': 'line'
+                },
+                'safe_pump_24_70_1h': {
+                    'color': '#481170',
+                    'type': 'line'
+                },
+                'safe_pump_24_80_1h': {
+                    'color': '#481180',
+                    'type': 'line'
+                },
+                'safe_pump_24_90_1h': {
+                    'color': '#481190',
+                    'type': 'line'
+                },
+                'safe_pump_24_100_1h': {
+                    'color': '#4811A0',
+                    'type': 'line'
+                },
+                'safe_pump_24_120_1h': {
+                    'color': '#4811C0',
+                    'type': 'line'
+                },
+                'safe_pump_36_10_1h': {
+                    'color': '#721110',
+                    'type': 'line'
+                },
+                'safe_pump_36_20_1h': {
+                    'color': '#721C0',
+                    'type': 'line'
+                },
+                'safe_pump_36_30_1h': {
+                    'color': '#721130',
+                    'type': 'line'
+                },
+                'safe_pump_36_40_1h': {
+                    'color': '#721140',
+                    'type': 'line'
+                },
+                'safe_pump_36_50_1h': {
+                    'color': '#721150',
+                    'type': 'line'
+                },
+                'safe_pump_36_60_1h': {
+                    'color': '#721160',
+                    'type': 'line'
+                },
+                'safe_pump_36_70_1h': {
+                    'color': '#721170',
+                    'type': 'line'
+                },
+                'safe_pump_36_80_1h': {
+                    'color': '#721180',
+                    'type': 'line'
+                },
+                'safe_pump_36_90_1h': {
+                    'color': '#721190',
+                    'type': 'line'
+                },
+                'safe_pump_36_100_1h': {
+                    'color': '#7211A0',
+                    'type': 'line'
+                },
+                'safe_pump_36_120_1h': {
+                    'color': '#7211C0',
+                    'type': 'line'
+                },
+                'safe_pump_48_10_1h': {
+                    'color': '#961110',
+                    'type': 'line'
+                },
+                'safe_pump_48_20_1h': {
+                    'color': '#961C0',
+                    'type': 'line'
+                },
+                'safe_pump_48_30_1h': {
+                    'color': '#961130',
+                    'type': 'line'
+                },
+                'safe_pump_48_40_1h': {
+                    'color': '#961140',
+                    'type': 'line'
+                },
+                'safe_pump_48_50_1h': {
+                    'color': '#961150',
+                    'type': 'line'
+                },
+                'safe_pump_48_60_1h': {
+                    'color': '#961160',
+                    'type': 'line'
+                },
+                'safe_pump_48_70_1h': {
+                    'color': '#961170',
+                    'type': 'line'
+                },
+                'safe_pump_48_80_1h': {
+                    'color': '#961180',
+                    'type': 'line'
+                },
+                'safe_pump_48_90_1h': {
+                    'color': '#961190',
+                    'type': 'line'
+                },
+                'safe_pump_48_100_1h': {
+                    'color': '#9611A0',
+                    'type': 'line'
+                },
+                'safe_pump_48_120_1h': {
+                    'color': '#9611C0',
+                    'type': 'line'
+                }
+            }
+        }
+    }
 
-    @staticmethod
-    def get_hold_trades_config_file():
+    #############################################################
+    # CACHES
+
+    hold_trades_cache = None
+    target_profit_cache = None
+    #############################################################
+
+    def get_hold_trades_config_file(self):
+        proper_holds_file_path = self.config["user_data_dir"].resolve() / "nfi-hold-trades.json"
+        if proper_holds_file_path.is_file():
+            return proper_holds_file_path
+
         strat_file_path = pathlib.Path(__file__)
         hold_trades_config_file_resolve = strat_file_path.resolve().parent / "hold-trades.json"
         if hold_trades_config_file_resolve.is_file():
+            log.warning(
+                "Please move %s to %s which is now the expected path for the holds file",
+                hold_trades_config_file_resolve,
+                proper_holds_file_path,
+            )
             return hold_trades_config_file_resolve
 
         # The resolved path does not exist, is it a symlink?
         hold_trades_config_file_absolute = strat_file_path.absolute().parent / "hold-trades.json"
         if hold_trades_config_file_absolute.is_file():
+            log.warning(
+                "Please move %s to %s which is now the expected path for the holds file",
+                hold_trades_config_file_absolute,
+                proper_holds_file_path,
+            )
             return hold_trades_config_file_absolute
 
-        if hold_trades_config_file_resolve != hold_trades_config_file_absolute:
-            looked_in = f"'{hold_trades_config_file_resolve}' and '{hold_trades_config_file_absolute}'"
-        else:
-            looked_in = f"'{hold_trades_config_file_resolve}'"
-        log.warning(
-            "The 'hold-trades.json' file was not found. Looked in %s. HOLD support disabled.",
-            looked_in
-        )
-
     def load_hold_trades_config(self):
-        if self.hold_trade_ids is not None:
-            # Already loaded
-            return
+        if self.hold_trades_cache is None:
+            hold_trades_config_file = self.get_hold_trades_config_file()
+            if hold_trades_config_file:
+                log.warning("Loading hold support data from %s", hold_trades_config_file)
+                self.hold_trades_cache = HoldsCache(hold_trades_config_file)
 
-        # Default Values
-        self.hold_trade_ids = {}
-
-        # Update values from config file, if it exists
-        hold_trades_config_file = NostalgiaForInfinityNext.get_hold_trades_config_file()
-        if not hold_trades_config_file:
-            return
-
-        with hold_trades_config_file.open('r') as f:
-            trade_ids = None
-            hold_trades_config = None
-            try:
-                hold_trades_config = json_load(f)
-            except rapidjson.JSONDecodeError as exc:
-                log.error("Failed to load JSON from %s: %s", hold_trades_config_file, exc)
-            else:
-                trade_ids = hold_trades_config.get("trade_ids")
-
-            if not trade_ids:
-                return
-
-            open_trades = {
-                trade.id: trade for trade in Trade.get_trades_proxy(is_open=True)
-            }
-
-            if isinstance(trade_ids, dict):
-                # New syntax
-                for trade_id, profit_ratio in trade_ids.items():
-                    try:
-                        trade_id = int(trade_id)
-                    except ValueError:
-                        log.error(
-                            "The trade_id(%s) defined under 'trade_ids' in %s is not an integer",
-                            trade_id, hold_trades_config_file
-                        )
-                        continue
-                    if not isinstance(profit_ratio, float):
-                        log.error(
-                            "The 'profit_ratio' config value(%s) for trade_id %s in %s is not a float",
-                            profit_ratio,
-                            trade_id,
-                            hold_trades_config_file
-                        )
-                    if trade_id in open_trades:
-                        formatted_profit_ratio = "{}%".format(profit_ratio * 100)
-                        log.warning(
-                            "The trade %s is configured to HOLD until the profit ratio of %s is met",
-                            open_trades[trade_id],
-                            formatted_profit_ratio
-                        )
-                        self.hold_trade_ids[trade_id] = profit_ratio
-                    else:
-                        log.warning(
-                            "The trade_id(%s) is no longer open. Please remove it from 'trade_ids' in %s",
-                            trade_id,
-                            hold_trades_config_file
-                        )
-            else:
-                # Initial Syntax
-                profit_ratio = hold_trades_config.get("profit_ratio")
-                if profit_ratio:
-                    if not isinstance(profit_ratio, float):
-                        log.error(
-                            "The 'profit_ratio' config value(%s) in %s is not a float",
-                            profit_ratio,
-                            hold_trades_config_file
-                        )
-                else:
-                    profit_ratio = 0.005
-                formatted_profit_ratio = "{}%".format(profit_ratio * 100)
-                for trade_id in trade_ids:
-                    if not isinstance(trade_id, int):
-                        log.error(
-                            "The trade_id(%s) defined under 'trade_ids' in %s is not an integer",
-                            trade_id, hold_trades_config_file
-                        )
-                        continue
-                    if trade_id in open_trades:
-                        log.warning(
-                            "The trade %s is configured to HOLD until the profit ratio of %s is met",
-                            open_trades[trade_id],
-                            formatted_profit_ratio
-                        )
-                        self.hold_trade_ids[trade_id] = profit_ratio
-                    else:
-                        log.warning(
-                            "The trade_id(%s) is no longer open. Please remove it from 'trade_ids' in %s",
-                            trade_id,
-                            hold_trades_config_file
-                        )
+        if self.hold_trades_cache:
+            self.hold_trades_cache.load()
 
     def bot_loop_start(self, **kwargs) -> None:
         """
@@ -2306,8 +2112,20 @@ class NostalgiaForInfinityNext(IStrategy):
         (e.g. gather some remote resource for comparison)
         :param **kwargs: Ensure to keep this here so updates to this won't break your strategy.
         """
-        if self.config['runmode'].value in ('live', 'dry_run'):
+        if self.config["runmode"].value not in ("live", "dry_run"):
+            return super().bot_loop_start(**kwargs)
+
+        if self.target_profit_cache is None:
+            self.target_profit_cache = Cache(
+                self.config["user_data_dir"] / "data-nfi-profit_target_by_pair.json"
+            )
+
+        # If the cached data hasn't changed, it's a no-op
+        self.target_profit_cache.save()
+
+        if self.holdSupportEnabled:
             self.load_hold_trades_config()
+
         return super().bot_loop_start(**kwargs)
 
     def get_ticker_indicator(self):
@@ -2315,165 +2133,258 @@ class NostalgiaForInfinityNext(IStrategy):
 
     def sell_over_main(self, current_profit: float, last_candle) -> tuple:
         if last_candle['close'] > last_candle['ema_200']:
-            if current_profit > self.sell_custom_profit_11.value:
-                if last_candle['rsi'] < self.sell_custom_rsi_11.value:
-                    return True, 'signal_profit_11'
-            elif self.sell_custom_profit_11.value > current_profit > self.sell_custom_profit_10.value:
-                if last_candle['rsi'] < self.sell_custom_rsi_10.value:
-                    return True, 'signal_profit_10'
-            elif self.sell_custom_profit_10.value > current_profit > self.sell_custom_profit_9.value:
-                if last_candle['rsi'] < self.sell_custom_rsi_9.value:
-                    return True, 'signal_profit_9'
-            elif self.sell_custom_profit_9.value > current_profit > self.sell_custom_profit_8.value:
-                if last_candle['rsi'] < self.sell_custom_rsi_8.value:
-                    return True, 'signal_profit_8'
-            elif self.sell_custom_profit_8.value > current_profit > self.sell_custom_profit_7.value:
-                if (last_candle['rsi'] < self.sell_custom_rsi_7.value) & (last_candle['cmf'] < 0.0) :
-                    return True, 'signal_profit_7'
-            elif self.sell_custom_profit_7.value > current_profit > self.sell_custom_profit_6.value:
-                if (last_candle['rsi'] < self.sell_custom_rsi_6.value) & (last_candle['cmf'] < 0.0):
-                    return True, 'signal_profit_6'
-            elif self.sell_custom_profit_6.value > current_profit > self.sell_custom_profit_5.value:
-                if (last_candle['rsi'] < self.sell_custom_rsi_5.value) & (last_candle['cmf'] < 0.0):
-                    return True, 'signal_profit_5'
-            elif self.sell_custom_profit_5.value > current_profit > self.sell_custom_profit_4.value:
-                if (last_candle['rsi'] < self.sell_custom_rsi_4.value) & (last_candle['cmf'] < 0.0) :
-                    return True, 'signal_profit_4'
-            elif self.sell_custom_profit_4.value > current_profit > self.sell_custom_profit_3.value:
-                if (last_candle['rsi'] < self.sell_custom_rsi_3.value) & (last_candle['cmf'] < 0.0):
-                    return True, 'signal_profit_3'
-            elif self.sell_custom_profit_3.value > current_profit > self.sell_custom_profit_2.value:
-                if (last_candle['rsi'] < self.sell_custom_rsi_2.value) & (last_candle['cmf'] < 0.0):
-                    return True, 'signal_profit_2'
-            elif self.sell_custom_profit_2.value > current_profit > self.sell_custom_profit_1.value:
-                if (last_candle['rsi'] < self.sell_custom_rsi_1.value) & (last_candle['cmf'] < 0.0):
-                    return True, 'signal_profit_1'
-            elif self.sell_custom_profit_1.value > current_profit > self.sell_custom_profit_0.value:
-                if (last_candle['rsi'] < self.sell_custom_rsi_0.value) & (last_candle['cmf'] < 0.0):
-                    return True, 'signal_profit_0'
+            if (last_candle['moderi_96']):
+                if current_profit >= self.sell_custom_profit_bull_11:
+                    if last_candle['rsi_14'] < self.sell_custom_rsi_under_bull_11:
+                        return True, 'signal_profit_o_bull_11'
+                elif self.sell_custom_profit_bull_11 > current_profit >= self.sell_custom_profit_bull_10:
+                    if last_candle['rsi_14'] < self.sell_custom_rsi_under_bull_10:
+                        return True, 'signal_profit_o_bull_10'
+                elif self.sell_custom_profit_bull_10 > current_profit >= self.sell_custom_profit_bull_9:
+                    if last_candle['rsi_14'] < self.sell_custom_rsi_under_bull_9:
+                        return True, 'signal_profit_o_bull_9'
+                elif self.sell_custom_profit_bull_9 > current_profit >= self.sell_custom_profit_bull_8:
+                    if last_candle['rsi_14'] < self.sell_custom_rsi_under_bull_8:
+                        return True, 'signal_profit_o_bull_8'
+                elif self.sell_custom_profit_bull_8 > current_profit >= self.sell_custom_profit_bull_7:
+                    if (last_candle['rsi_14'] < self.sell_custom_rsi_under_bull_7):
+                        return True, 'signal_profit_o_bull_7'
+                elif self.sell_custom_profit_bull_7 > current_profit >= self.sell_custom_profit_bull_6:
+                    if (last_candle['rsi_14'] < self.sell_custom_rsi_under_bull_6) and (last_candle['cmf'] < 0.0):
+                        return True, 'signal_profit_o_bull_6'
+                elif self.sell_custom_profit_bull_6 > current_profit >= self.sell_custom_profit_bull_5:
+                    if (last_candle['rsi_14'] < self.sell_custom_rsi_under_bull_5) and (last_candle['cmf'] < 0.0):
+                        return True, 'signal_profit_o_bull_5'
+                elif self.sell_custom_profit_bull_5 > current_profit >= self.sell_custom_profit_bull_4:
+                    if (last_candle['rsi_14'] < self.sell_custom_rsi_under_bull_4) and (last_candle['cmf'] < 0.0) :
+                        return True, 'signal_profit_o_bull_4'
+                elif self.sell_custom_profit_bull_4 > current_profit >= self.sell_custom_profit_bull_3:
+                    if (last_candle['rsi_14'] < self.sell_custom_rsi_under_bull_3) and (last_candle['cmf'] < 0.0):
+                        return True, 'signal_profit_o_bull_3'
+                elif self.sell_custom_profit_bull_3 > current_profit >= self.sell_custom_profit_bull_2:
+                    if (last_candle['rsi_14'] < self.sell_custom_rsi_under_bull_2) and (last_candle['cmf'] < 0.0):
+                        return True, 'signal_profit_o_bull_2'
+                elif self.sell_custom_profit_bull_2 > current_profit >= self.sell_custom_profit_bull_1:
+                    if (last_candle['rsi_14'] < self.sell_custom_rsi_under_bull_1) and (last_candle['cmf'] < 0.0):
+                        return True, 'signal_profit_o_bull_1'
+                elif self.sell_custom_profit_bull_1 > current_profit >= self.sell_custom_profit_bull_0:
+                    if (last_candle['rsi_14'] < self.sell_custom_rsi_under_bull_0) and (last_candle['cmf'] < 0.0):
+                        return True, 'signal_profit_o_bull_0'
+            else:
+                if current_profit >= self.sell_custom_profit_bear_11:
+                    if last_candle['rsi_14'] < self.sell_custom_rsi_under_bear_11:
+                        return True, 'signal_profit_o_bear_11'
+                elif self.sell_custom_profit_bear_11 > current_profit >= self.sell_custom_profit_bear_10:
+                    if last_candle['rsi_14'] < self.sell_custom_rsi_under_bear_10:
+                        return True, 'signal_profit_o_bear_10'
+                elif self.sell_custom_profit_bear_10 > current_profit >= self.sell_custom_profit_bear_9:
+                    if last_candle['rsi_14'] < self.sell_custom_rsi_under_bear_9:
+                        return True, 'signal_profit_o_bear_9'
+                elif self.sell_custom_profit_bear_9 > current_profit >= self.sell_custom_profit_bear_8:
+                    if last_candle['rsi_14'] < self.sell_custom_rsi_under_bear_8:
+                        return True, 'signal_profit_o_bear_8_1'
+                    elif (last_candle['rsi_14'] > self.sell_custom_rsi_over_bear_8):
+                        return True, 'signal_profit_o_bear_8_2'
+                elif self.sell_custom_profit_bear_8 > current_profit >= self.sell_custom_profit_bear_7:
+                    if (last_candle['rsi_14'] < self.sell_custom_rsi_under_bear_7):
+                        return True, 'signal_profit_o_bear_7_1'
+                    elif (last_candle['rsi_14'] > self.sell_custom_rsi_over_bear_7):
+                        return True, 'signal_profit_o_bear_7_2'
+                elif self.sell_custom_profit_bear_7 > current_profit >= self.sell_custom_profit_bear_6:
+                    if (last_candle['rsi_14'] < self.sell_custom_rsi_under_bear_6):
+                        return True, 'signal_profit_o_bear_6_1'
+                    elif (last_candle['rsi_14'] > self.sell_custom_rsi_over_bear_6):
+                        return True, 'signal_profit_o_bear_6_2'
+                elif self.sell_custom_profit_bear_6 > current_profit >= self.sell_custom_profit_bear_5:
+                    if (last_candle['rsi_14'] < self.sell_custom_rsi_under_bear_5):
+                        return True, 'signal_profit_o_bear_5_1'
+                    elif (last_candle['rsi_14'] > self.sell_custom_rsi_over_bear_5):
+                        return True, 'signal_profit_o_bear_5_2'
+                elif self.sell_custom_profit_bear_5 > current_profit >= self.sell_custom_profit_bear_4:
+                    if (last_candle['rsi_14'] < self.sell_custom_rsi_under_bear_4):
+                        return True, 'signal_profit_o_bear_4'
+                elif self.sell_custom_profit_bear_4 > current_profit >= self.sell_custom_profit_bear_3:
+                    if (last_candle['rsi_14'] < self.sell_custom_rsi_under_bear_3) and (last_candle['cmf'] < 0.0):
+                        return True, 'signal_profit_o_bear_3'
+                elif self.sell_custom_profit_bear_3 > current_profit >= self.sell_custom_profit_bear_2:
+                    if (last_candle['rsi_14'] < self.sell_custom_rsi_under_bear_2) and (last_candle['cmf'] < 0.0):
+                        return True, 'signal_profit_o_bear_2'
+                elif self.sell_custom_profit_bear_2 > current_profit >= self.sell_custom_profit_bear_1:
+                    if (last_candle['rsi_14'] < self.sell_custom_rsi_under_bear_1) and (last_candle['cmf'] < 0.0):
+                        return True, 'signal_profit_o_bear_1'
+                elif self.sell_custom_profit_bear_1 > current_profit >= self.sell_custom_profit_bear_0:
+                    if (last_candle['rsi_14'] < self.sell_custom_rsi_under_bear_0) and (last_candle['cmf'] < 0.0):
+                        return True, 'signal_profit_o_bear_0'
+
         return False, None
 
     def sell_under_main(self, current_profit: float, last_candle) -> tuple:
         if last_candle['close'] < last_candle['ema_200']:
-            if current_profit > self.sell_custom_under_profit_11.value:
-                if last_candle['rsi'] < self.sell_custom_under_rsi_11.value:
-                    return True, 'signal_profit_u_11'
-            elif self.sell_custom_under_profit_11.value > current_profit > self.sell_custom_under_profit_10.value:
-                if last_candle['rsi'] < self.sell_custom_under_rsi_10.value:
-                    return True, 'signal_profit_u_10'
-            elif self.sell_custom_under_profit_10.value > current_profit > self.sell_custom_under_profit_9.value:
-                if last_candle['rsi'] < self.sell_custom_under_rsi_9.value:
-                    return True, 'signal_profit_u_9'
-            elif self.sell_custom_under_profit_9.value > current_profit > self.sell_custom_under_profit_8.value:
-                if last_candle['rsi'] < self.sell_custom_under_rsi_8.value:
-                    return True, 'signal_profit_u_8'
-            elif self.sell_custom_under_profit_8.value > current_profit > self.sell_custom_under_profit_7.value:
-                if last_candle['rsi'] < self.sell_custom_under_rsi_7.value:
-                    return True, 'signal_profit_u_7'
-            elif self.sell_custom_under_profit_7.value > current_profit > self.sell_custom_under_profit_6.value:
-                if last_candle['rsi'] < self.sell_custom_under_rsi_6.value:
-                    return True, 'signal_profit_u_6'
-            elif self.sell_custom_under_profit_6.value > current_profit > self.sell_custom_under_profit_5.value:
-                if last_candle['rsi'] < self.sell_custom_under_rsi_5.value:
-                    return True, 'signal_profit_u_5'
-            elif self.sell_custom_under_profit_5.value > current_profit > self.sell_custom_under_profit_4.value:
-                if last_candle['rsi'] < self.sell_custom_under_rsi_4.value:
-                    return True, 'signal_profit_u_4'
-            elif self.sell_custom_under_profit_4.value > current_profit > self.sell_custom_under_profit_3.value:
-                if last_candle['rsi'] < self.sell_custom_under_rsi_3.value:
-                    return True, 'signal_profit_u_3'
-            elif self.sell_custom_under_profit_3.value > current_profit > self.sell_custom_under_profit_2.value:
-                if last_candle['rsi'] < self.sell_custom_under_rsi_2.value:
-                    return True, 'signal_profit_u_2'
-            elif self.sell_custom_under_profit_2.value > current_profit > self.sell_custom_under_profit_1.value:
-                if last_candle['rsi'] < self.sell_custom_under_rsi_1.value:
-                    return True, 'signal_profit_u_1'
-            elif self.sell_custom_under_profit_1.value > current_profit > self.sell_custom_under_profit_0.value:
-                if (last_candle['rsi'] < self.sell_custom_under_rsi_0.value) & (last_candle['cmf'] < 0.0):
-                    return True, 'signal_profit_u_0'
+            if (last_candle['moderi_96']):
+                if current_profit >= self.sell_custom_under_profit_bull_11:
+                    if last_candle['rsi_14'] < self.sell_custom_under_rsi_under_bull_11:
+                        return True, 'signal_profit_u_bull_11'
+                elif self.sell_custom_under_profit_bull_11 > current_profit >= self.sell_custom_under_profit_bull_10:
+                    if last_candle['rsi_14'] < self.sell_custom_under_rsi_under_bull_10:
+                        return True, 'signal_profit_u_bull_10'
+                elif self.sell_custom_under_profit_bull_10 > current_profit >= self.sell_custom_under_profit_bull_9:
+                    if last_candle['rsi_14'] < self.sell_custom_under_rsi_under_bull_9:
+                        return True, 'signal_profit_u_bull_9'
+                elif self.sell_custom_under_profit_bull_9 > current_profit >= self.sell_custom_under_profit_bull_8:
+                    if last_candle['rsi_14'] < self.sell_custom_under_rsi_under_bull_8:
+                        return True, 'signal_profit_u_bull_8'
+                elif self.sell_custom_under_profit_bull_8 > current_profit >= self.sell_custom_under_profit_bull_7:
+                    if last_candle['rsi_14'] < self.sell_custom_under_rsi_under_bull_7:
+                        return True, 'signal_profit_u_bull_7'
+                elif self.sell_custom_under_profit_bull_7 > current_profit >= self.sell_custom_under_profit_bull_6:
+                    if last_candle['rsi_14'] < self.sell_custom_under_rsi_under_bull_6:
+                        return True, 'signal_profit_u_bull_6'
+                elif self.sell_custom_under_profit_bull_6 > current_profit >= self.sell_custom_under_profit_bull_5:
+                    if last_candle['rsi_14'] < self.sell_custom_under_rsi_under_bull_5:
+                        return True, 'signal_profit_u_bull_5'
+                elif self.sell_custom_under_profit_bull_5 > current_profit >= self.sell_custom_under_profit_bull_4:
+                    if last_candle['rsi_14'] < self.sell_custom_under_rsi_under_bull_4:
+                        return True, 'signal_profit_u_bull_4'
+                elif self.sell_custom_under_profit_bull_4 > current_profit >= self.sell_custom_under_profit_bull_3:
+                    if last_candle['rsi_14'] < self.sell_custom_under_rsi_under_bull_3:
+                        return True, 'signal_profit_u_bull_3'
+                elif self.sell_custom_under_profit_bull_3 > current_profit >= self.sell_custom_under_profit_bull_2:
+                    if last_candle['rsi_14'] < self.sell_custom_under_rsi_under_bull_2:
+                        return True, 'signal_profit_u_bull_2'
+                elif self.sell_custom_under_profit_bull_2 > current_profit >= self.sell_custom_under_profit_bull_1:
+                    if last_candle['rsi_14'] < self.sell_custom_under_rsi_under_bull_1:
+                        return True, 'signal_profit_u_bull_1'
+                elif self.sell_custom_under_profit_bull_1 > current_profit >= self.sell_custom_under_profit_bull_0:
+                    if (last_candle['rsi_14'] < self.sell_custom_under_rsi_under_bull_0) and (last_candle['cmf'] < 0.0):
+                        return True, 'signal_profit_u_bull_0'
+            else:
+                if current_profit >= self.sell_custom_under_profit_bear_11:
+                    if last_candle['rsi_14'] < self.sell_custom_under_rsi_under_bear_11:
+                        return True, 'signal_profit_u_bear_11'
+                elif self.sell_custom_under_profit_bear_11 > current_profit >= self.sell_custom_under_profit_bear_10:
+                    if last_candle['rsi_14'] < self.sell_custom_under_rsi_under_bear_10:
+                        return True, 'signal_profit_u_bear_10'
+                elif self.sell_custom_under_profit_bear_10 > current_profit >= self.sell_custom_under_profit_bear_9:
+                    if last_candle['rsi_14'] < self.sell_custom_under_rsi_under_bear_9:
+                        return True, 'signal_profit_u_bear_9'
+                elif self.sell_custom_under_profit_bear_9 > current_profit >= self.sell_custom_under_profit_bear_8:
+                    if last_candle['rsi_14'] < self.sell_custom_under_rsi_under_bear_8:
+                        return True, 'signal_profit_u_bear_8_1'
+                    elif (last_candle['rsi_14'] > self.sell_custom_under_rsi_over_bear_8):
+                        return True, 'signal_profit_u_bear_8_2'
+                elif self.sell_custom_under_profit_bear_8 > current_profit >= self.sell_custom_under_profit_bear_7:
+                    if last_candle['rsi_14'] < self.sell_custom_under_rsi_under_bear_7:
+                        return True, 'signal_profit_u_bear_7_1'
+                    elif (last_candle['rsi_14'] > self.sell_custom_under_rsi_over_bear_7):
+                        return True, 'signal_profit_u_bear_7_2'
+                elif self.sell_custom_under_profit_bear_7 > current_profit >= self.sell_custom_under_profit_bear_6:
+                    if last_candle['rsi_14'] < self.sell_custom_under_rsi_under_bear_6:
+                        return True, 'signal_profit_u_bear_6_1'
+                    elif (last_candle['rsi_14'] > self.sell_custom_under_rsi_over_bear_6):
+                        return True, 'signal_profit_u_bear_6_2'
+                elif self.sell_custom_under_profit_bear_6 > current_profit >= self.sell_custom_under_profit_bear_5:
+                    if last_candle['rsi_14'] < self.sell_custom_under_rsi_under_bear_5:
+                        return True, 'signal_profit_u_bear_5_1'
+                    elif (last_candle['rsi_14'] > self.sell_custom_under_rsi_over_bear_5):
+                        return True, 'signal_profit_u_bear_5_2'
+                elif self.sell_custom_under_profit_bear_5 > current_profit >= self.sell_custom_under_profit_bear_4:
+                    if last_candle['rsi_14'] < self.sell_custom_under_rsi_under_bear_4:
+                        return True, 'signal_profit_u_bear_4'
+                elif self.sell_custom_under_profit_bear_4 > current_profit >= self.sell_custom_under_profit_bear_3:
+                    if last_candle['rsi_14'] < self.sell_custom_under_rsi_under_bear_3:
+                        return True, 'signal_profit_u_bear_3'
+                elif self.sell_custom_under_profit_bear_3 > current_profit >= self.sell_custom_under_profit_bear_2:
+                    if last_candle['rsi_14'] < self.sell_custom_under_rsi_under_bear_2:
+                        return True, 'signal_profit_u_bear_2'
+                elif self.sell_custom_under_profit_bear_2 > current_profit >= self.sell_custom_under_profit_bear_1:
+                    if last_candle['rsi_14'] < self.sell_custom_under_rsi_under_bear_1:
+                        return True, 'signal_profit_u_bear_1'
+                elif self.sell_custom_under_profit_bear_1 > current_profit >= self.sell_custom_under_profit_bear_0:
+                    if (last_candle['rsi_14'] < self.sell_custom_under_rsi_under_bear_0) and (last_candle['cmf'] < 0.0):
+                        return True, 'signal_profit_u_bear_0'
 
         return False, None
 
     def sell_pump_main(self, current_profit: float, last_candle) -> tuple:
         if last_candle['sell_pump_48_1_1h']:
-            if current_profit > self.sell_custom_pump_profit_1_5.value:
-                if last_candle['rsi'] < self.sell_custom_pump_rsi_1_5.value:
+            if current_profit >= self.sell_custom_pump_profit_1_5:
+                if last_candle['rsi_14'] < self.sell_custom_pump_rsi_1_5:
                     return True, 'signal_profit_p_1_5'
-            elif self.sell_custom_pump_profit_1_5.value > current_profit > self.sell_custom_pump_profit_1_4.value:
-                if last_candle['rsi'] < self.sell_custom_pump_rsi_1_4.value:
+            elif self.sell_custom_pump_profit_1_5 > current_profit >= self.sell_custom_pump_profit_1_4:
+                if last_candle['rsi_14'] < self.sell_custom_pump_rsi_1_4:
                     return True, 'signal_profit_p_1_4'
-            elif self.sell_custom_pump_profit_1_4.value > current_profit > self.sell_custom_pump_profit_1_3.value:
-                if last_candle['rsi'] < self.sell_custom_pump_rsi_1_3.value:
+            elif self.sell_custom_pump_profit_1_4 > current_profit >= self.sell_custom_pump_profit_1_3:
+                if last_candle['rsi_14'] < self.sell_custom_pump_rsi_1_3:
                     return True, 'signal_profit_p_1_3'
-            elif self.sell_custom_pump_profit_1_3.value > current_profit > self.sell_custom_pump_profit_1_2.value:
-                if last_candle['rsi'] < self.sell_custom_pump_rsi_1_2.value:
+            elif self.sell_custom_pump_profit_1_3 > current_profit >= self.sell_custom_pump_profit_1_2:
+                if last_candle['rsi_14'] < self.sell_custom_pump_rsi_1_2:
                     return True, 'signal_profit_p_1_2'
-            elif self.sell_custom_pump_profit_1_2.value > current_profit > self.sell_custom_pump_profit_1_1.value:
-                if last_candle['rsi'] < self.sell_custom_pump_rsi_1_1.value:
+            elif self.sell_custom_pump_profit_1_2 > current_profit >= self.sell_custom_pump_profit_1_1:
+                if last_candle['rsi_14'] < self.sell_custom_pump_rsi_1_1:
                     return True, 'signal_profit_p_1_1'
 
         elif last_candle['sell_pump_36_1_1h']:
-            if current_profit > self.sell_custom_pump_profit_2_5.value:
-                if last_candle['rsi'] < self.sell_custom_pump_rsi_2_5.value:
+            if current_profit >= self.sell_custom_pump_profit_2_5:
+                if last_candle['rsi_14'] < self.sell_custom_pump_rsi_2_5:
                     return True, 'signal_profit_p_2_5'
-            elif self.sell_custom_pump_profit_2_5.value > current_profit > self.sell_custom_pump_profit_2_4.value:
-                if last_candle['rsi'] < self.sell_custom_pump_rsi_2_4.value:
+            elif self.sell_custom_pump_profit_2_5 > current_profit >= self.sell_custom_pump_profit_2_4:
+                if last_candle['rsi_14'] < self.sell_custom_pump_rsi_2_4:
                     return True, 'signal_profit_p_2_4'
-            elif self.sell_custom_pump_profit_2_4.value > current_profit > self.sell_custom_pump_profit_2_3.value:
-                if last_candle['rsi'] < self.sell_custom_pump_rsi_2_3.value:
+            elif self.sell_custom_pump_profit_2_4 > current_profit >= self.sell_custom_pump_profit_2_3:
+                if last_candle['rsi_14'] < self.sell_custom_pump_rsi_2_3:
                     return True, 'signal_profit_p_2_3'
-            elif self.sell_custom_pump_profit_2_3.value > current_profit > self.sell_custom_pump_profit_2_2.value:
-                if last_candle['rsi'] < self.sell_custom_pump_rsi_2_2.value:
+            elif self.sell_custom_pump_profit_2_3 > current_profit >= self.sell_custom_pump_profit_2_2:
+                if last_candle['rsi_14'] < self.sell_custom_pump_rsi_2_2:
                     return True, 'signal_profit_p_2_2'
-            elif self.sell_custom_pump_profit_2_2.value > current_profit > self.sell_custom_pump_profit_2_1.value:
-                if last_candle['rsi'] < self.sell_custom_pump_rsi_2_1.value:
+            elif self.sell_custom_pump_profit_2_2 > current_profit >= self.sell_custom_pump_profit_2_1:
+                if last_candle['rsi_14'] < self.sell_custom_pump_rsi_2_1:
                     return True, 'signal_profit_p_2_1'
 
         elif last_candle['sell_pump_24_1_1h']:
-            if current_profit > self.sell_custom_pump_profit_3_5.value:
-                if last_candle['rsi'] < self.sell_custom_pump_rsi_3_5.value:
+            if current_profit >= self.sell_custom_pump_profit_3_5:
+                if last_candle['rsi_14'] < self.sell_custom_pump_rsi_3_5:
                     return True, 'signal_profit_p_3_5'
-            elif self.sell_custom_pump_profit_3_5.value > current_profit > self.sell_custom_pump_profit_3_4.value:
-                if last_candle['rsi'] < self.sell_custom_pump_rsi_3_4.value:
+            elif self.sell_custom_pump_profit_3_5 > current_profit >= self.sell_custom_pump_profit_3_4:
+                if last_candle['rsi_14'] < self.sell_custom_pump_rsi_3_4:
                     return True, 'signal_profit_p_3_4'
-            elif self.sell_custom_pump_profit_3_4.value > current_profit > self.sell_custom_pump_profit_3_3.value:
-                if last_candle['rsi'] < self.sell_custom_pump_rsi_3_3.value:
+            elif self.sell_custom_pump_profit_3_4 > current_profit >= self.sell_custom_pump_profit_3_3:
+                if last_candle['rsi_14'] < self.sell_custom_pump_rsi_3_3:
                     return True, 'signal_profit_p_3_3'
-            elif self.sell_custom_pump_profit_3_3.value > current_profit > self.sell_custom_pump_profit_3_2.value:
-                if last_candle['rsi'] < self.sell_custom_pump_rsi_3_2.value:
+            elif self.sell_custom_pump_profit_3_3 > current_profit >= self.sell_custom_pump_profit_3_2:
+                if last_candle['rsi_14'] < self.sell_custom_pump_rsi_3_2:
                     return True, 'signal_profit_p_3_2'
-            elif self.sell_custom_pump_profit_3_2.value > current_profit > self.sell_custom_pump_profit_3_1.value:
-                if last_candle['rsi'] < self.sell_custom_pump_rsi_3_1.value:
+            elif self.sell_custom_pump_profit_3_2 > current_profit >= self.sell_custom_pump_profit_3_1:
+                if last_candle['rsi_14'] < self.sell_custom_pump_rsi_3_1:
                     return True, 'signal_profit_p_3_1'
 
         return False, None
 
     def sell_dec_main(self, current_profit: float, last_candle) -> tuple:
-        if (self.sell_custom_dec_profit_max_1.value > current_profit > self.sell_custom_dec_profit_min_1.value) & (last_candle['sma_200_dec_20']):
+        if (self.sell_custom_dec_profit_max_1 > current_profit >= self.sell_custom_dec_profit_min_1) and (last_candle['sma_200_dec_20']):
             return True, 'signal_profit_d_1'
-        elif (self.sell_custom_dec_profit_max_2.value > current_profit > self.sell_custom_dec_profit_min_2.value) & (last_candle['close'] < last_candle['ema_100']):
+        elif (self.sell_custom_dec_profit_max_2 > current_profit >= self.sell_custom_dec_profit_min_2) and (last_candle['close'] < last_candle['ema_100']):
             return True, 'signal_profit_d_2'
 
         return False, None
 
     def sell_trail_main(self, current_profit: float, last_candle, max_profit: float) -> tuple:
-        if (self.sell_trail_profit_max_1.value > current_profit > self.sell_trail_profit_min_1.value) & (self.sell_trail_rsi_min_1.value < last_candle['rsi'] < self.sell_trail_rsi_max_1.value) & (max_profit > (current_profit + self.sell_trail_down_1.value)) & (last_candle['moderi_96'] == False):
+        if (self.sell_trail_profit_max_1 > current_profit >= self.sell_trail_profit_min_1) and (self.sell_trail_rsi_min_1 < last_candle['rsi_14'] < self.sell_trail_rsi_max_1) and (max_profit > (current_profit + self.sell_trail_down_1)) and (last_candle['moderi_96'] == False):
             return True, 'signal_profit_t_1'
-        elif (self.sell_trail_profit_max_2.value > current_profit > self.sell_trail_profit_min_2.value) & (self.sell_trail_rsi_min_2.value < last_candle['rsi'] < self.sell_trail_rsi_max_2.value) & (max_profit > (current_profit + self.sell_trail_down_2.value)) & (last_candle['ema_25'] < last_candle['ema_50']):
+        elif (self.sell_trail_profit_max_2 > current_profit >= self.sell_trail_profit_min_2) and (self.sell_trail_rsi_min_2 < last_candle['rsi_14'] < self.sell_trail_rsi_max_2) and (max_profit > (current_profit + self.sell_trail_down_2)) and (last_candle['ema_25'] < last_candle['ema_50']):
             return True, 'signal_profit_t_2'
-        elif (self.sell_trail_profit_max_3.value > current_profit > self.sell_trail_profit_min_3.value) & (max_profit > (current_profit + self.sell_trail_down_3.value)) & (last_candle['sma_200_dec_20_1h']):
+        elif (self.sell_trail_profit_max_3 > current_profit >= self.sell_trail_profit_min_3) and (max_profit > (current_profit + self.sell_trail_down_3)) and (last_candle['sma_200_dec_20_1h']):
             return True, 'signal_profit_t_3'
-        elif (self.sell_trail_profit_max_4.value > current_profit > self.sell_trail_profit_min_4.value) & (max_profit > (current_profit + self.sell_trail_down_4.value)) & (last_candle['sma_200_dec_24']) & (last_candle['cmf'] < 0.0):
+        elif (self.sell_trail_profit_max_4 > current_profit >= self.sell_trail_profit_min_4) and (max_profit > (current_profit + self.sell_trail_down_4)) and (last_candle['sma_200_dec_24']) and (last_candle['cmf'] < 0.0):
             return True, 'signal_profit_t_4'
 
         return False, None
 
     def sell_duration_main(self, current_profit: float, last_candle, trade: 'Trade', current_time: 'datetime') -> tuple:
         # Pumped pair, short duration
-        if (last_candle['sell_pump_24_1_1h']) & (0.2 > current_profit > 0.07) & (current_time - timedelta(minutes=30) < trade.open_date_utc):
+        if (last_candle['sell_pump_24_1_1h']) and (0.2 > current_profit >= 0.07) and (current_time - timedelta(minutes=30) < trade.open_date_utc):
             return True, 'signal_profit_p_s_1'
 
-        elif (self.sell_custom_long_profit_min_1.value < current_profit < self.sell_custom_long_profit_max_1.value) & (current_time - timedelta(minutes=self.sell_custom_long_duration_min_1.value) > trade.open_date_utc):
+        elif (self.sell_custom_long_profit_min_1 < current_profit < self.sell_custom_long_profit_max_1) and (current_time - timedelta(minutes=self.sell_custom_long_duration_min_1) > trade.open_date_utc):
             return True, 'signal_profit_l_1'
 
         return False, None
@@ -2481,356 +2392,447 @@ class NostalgiaForInfinityNext(IStrategy):
     def sell_under_min(self, current_profit: float, last_candle) -> tuple:
         if ((last_candle['moderi_96']) == False):
             # Downtrend
-            if (self.sell_custom_profit_under_profit_max_1.value > current_profit > self.sell_custom_profit_under_profit_min_1.value) & (last_candle['close'] < last_candle['ema_200']) & (((last_candle['ema_200'] - last_candle['close']) / last_candle['close']) < self.sell_custom_profit_under_rel_1.value) & (last_candle['rsi'] > last_candle['rsi_1h'] + self.sell_custom_profit_under_rsi_diff_1.value):
+            if (self.sell_custom_profit_under_profit_max_1 > current_profit >= self.sell_custom_profit_under_profit_min_1) and (last_candle['close'] < last_candle['ema_200']) and (((last_candle['ema_200'] - last_candle['close']) / last_candle['close']) < self.sell_custom_profit_under_rel_1) and (last_candle['rsi_14'] > last_candle['rsi_14_1h'] + self.sell_custom_profit_under_rsi_diff_1):
                 return True, 'signal_profit_u_e_1'
         else:
             # Uptrend
-            if (current_profit > self.sell_custom_profit_under_profit_2.value) & (last_candle['close'] < last_candle['ema_200']) & (((last_candle['ema_200'] - last_candle['close']) / last_candle['close']) < self.sell_custom_profit_under_rel_2.value) & (last_candle['rsi'] > last_candle['rsi_1h'] + self.sell_custom_profit_under_rsi_diff_2.value):
+            if (current_profit >= self.sell_custom_profit_under_profit_2) and (last_candle['close'] < last_candle['ema_200']) and (((last_candle['ema_200'] - last_candle['close']) / last_candle['close']) < self.sell_custom_profit_under_rel_2) and (last_candle['rsi_14'] > last_candle['rsi_14_1h'] + self.sell_custom_profit_under_rsi_diff_2):
                 return True, 'signal_profit_u_e_2'
 
         return False, None
 
-    def sell_stoploss(self, current_profit: float, last_candle, trade: 'Trade', current_time: 'datetime', max_loss: float, max_profit: float) -> tuple:
-        if (current_profit < -0.0) & (last_candle['close'] < last_candle['ema_200']) & (((last_candle['ema_200'] - last_candle['close']) / last_candle['close']) < self.sell_custom_stoploss_under_rel_1.value) & (last_candle['rsi'] > last_candle['rsi_1h'] + self.sell_custom_stoploss_under_rsi_diff_1.value) & (last_candle['cmf'] < -0.2) & (last_candle['sma_200_dec_24']) & (current_time - timedelta(minutes=720) > trade.open_date_utc):
-            return True, 'signal_stoploss_u_1'
-
-        # Under EMA200, pair & BTC negative, low max rate
-        elif (-0.1 > current_profit > -0.14) & (last_candle['btc_not_downtrend_1h'] == False) & (last_candle['moderi_32'] == False) & (last_candle['moderi_64'] == False) & (max_profit < 0.005) & (max_loss < 0.14) & (last_candle['sma_200_dec_24']) & (last_candle['cmf'] < -0.0) & (last_candle['close'] < last_candle['ema_200']) & (last_candle['ema_25'] < last_candle['ema_50']) & (last_candle['cti'] < -0.8) & (last_candle['r_480'] < -50.0):
-            return True, 'signal_stoploss_u_b_1'
-
-        # Under EMA200, pair & BTC negative, CTI, Elder Ray Index negative, normal max rate
-        elif (-0.1 > current_profit > -0.2) & (last_candle['btc_not_downtrend_1h'] == False) & (last_candle['moderi_32'] == False) & (last_candle['moderi_64'] == False) & (last_candle['moderi_96'] == False) & (max_profit < 0.05) & (max_loss < 0.2) & (last_candle['sma_200_dec_24'])& (last_candle['sma_200_dec_20_1h']) & (last_candle['cmf'] < -0.45) & (last_candle['close'] < last_candle['ema_200']) & (last_candle['ema_25'] < last_candle['ema_50']) & (last_candle['cti'] < -0.8) & (last_candle['r_480'] < -97.0):
-            return True, 'signal_stoploss_u_b_2'
-
-        elif (self.sell_custom_stoploss_long_profit_min_1.value < current_profit < self.sell_custom_stoploss_long_profit_max_1.value) & (current_profit > (-max_loss + self.sell_custom_stoploss_long_recover_1.value)) & (last_candle['cmf'] < 0.0) & (last_candle['close'] < last_candle['ema_200'])  & (last_candle['rsi'] > last_candle['rsi_1h'] + self.sell_custom_stoploss_long_rsi_diff_1.value) & (last_candle['sma_200_dec_24']) & (current_time - timedelta(minutes=1200) > trade.open_date_utc):
-            return True, 'signal_stoploss_l_r_u_1'
-
-        elif (current_profit < -0.0) & (current_profit > (-max_loss + self.sell_custom_stoploss_long_recover_2.value)) & (last_candle['close'] < last_candle['ema_200']) & (last_candle['cmf'] < 0.0) & (last_candle['rsi'] > last_candle['rsi_1h'] + self.sell_custom_stoploss_long_rsi_diff_2.value) & (last_candle['sma_200_dec_24']) & (current_time - timedelta(minutes=1200) > trade.open_date_utc):
-            return True, 'signal_stoploss_l_r_u_2'
-
-        elif (max_profit < self.sell_custom_stoploss_pump_max_profit_2.value) & (current_profit < self.sell_custom_stoploss_pump_loss_2.value) & (last_candle['sell_pump_48_1_1h']) & (last_candle['cmf'] < 0.0) & (last_candle['sma_200_dec_20_1h']) & (last_candle['close'] < (last_candle['ema_200'] * self.sell_custom_stoploss_pump_ma_offset_2.value)):
-            return True, 'signal_stoploss_p_2'
-
-        elif (max_profit < self.sell_custom_stoploss_pump_max_profit_3.value) & (current_profit < self.sell_custom_stoploss_pump_loss_3.value) & (last_candle['sell_pump_36_3_1h']) & (last_candle['close'] < (last_candle['ema_200'] * self.sell_custom_stoploss_pump_ma_offset_3.value)):
-            return True, 'signal_stoploss_p_3'
+    def sell_stoploss(self, current_profit: float, last_candle, previous_candle_1) -> tuple:
+        if (-0.12 <= current_profit < -0.08):
+            if (last_candle['close'] < last_candle['atr_high_thresh_1']) and (previous_candle_1['close'] > previous_candle_1['atr_high_thresh_1']):
+                return True, 'signal_stoploss_atr_1'
+        elif (-0.16 <= current_profit < -0.12):
+            if (last_candle['close'] < last_candle['atr_high_thresh_2']) and (previous_candle_1['close'] > previous_candle_1['atr_high_thresh_2']):
+                return True, 'signal_stoploss_atr_2'
+        elif (-0.2 <= current_profit < -0.16):
+            if (last_candle['close'] < last_candle['atr_high_thresh_3']) and (previous_candle_1['close'] > previous_candle_1['atr_high_thresh_3']):
+                return True, 'signal_stoploss_atr_3'
+        elif (current_profit < -0.2):
+            if (last_candle['close'] < last_candle['atr_high_thresh_4']) and (previous_candle_1['close'] > previous_candle_1['atr_high_thresh_4']):
+                return True, 'signal_stoploss_atr_4'
 
         return False, None
 
     def sell_pump_dec(self, current_profit: float, last_candle) -> tuple:
-        if (self.sell_custom_pump_dec_profit_max_1.value > current_profit > self.sell_custom_pump_dec_profit_min_1.value) & (last_candle['sell_pump_48_1_1h']) & (last_candle['sma_200_dec_20']) & (last_candle['close'] < last_candle['ema_200']):
+        if (self.sell_custom_pump_dec_profit_max_1 > current_profit >= self.sell_custom_pump_dec_profit_min_1) and (last_candle['sell_pump_48_1_1h']) and (last_candle['sma_200_dec_20']) and (last_candle['close'] < last_candle['ema_200']):
             return True, 'signal_profit_p_d_1'
-        elif (self.sell_custom_pump_dec_profit_max_2.value > current_profit > self.sell_custom_pump_dec_profit_min_2.value) & (last_candle['sell_pump_48_2_1h']) & (last_candle['sma_200_dec_20']) & (last_candle['close'] < last_candle['ema_200']):
+        elif (self.sell_custom_pump_dec_profit_max_2 > current_profit >= self.sell_custom_pump_dec_profit_min_2) and (last_candle['sell_pump_48_2_1h']) and (last_candle['sma_200_dec_20']) and (last_candle['close'] < last_candle['ema_200']):
             return True, 'signal_profit_p_d_2'
-        elif (self.sell_custom_pump_dec_profit_max_3.value > current_profit > self.sell_custom_pump_dec_profit_min_3.value) & (last_candle['sell_pump_48_3_1h']) & (last_candle['sma_200_dec_20']) & (last_candle['close'] < last_candle['ema_200']):
+        elif (self.sell_custom_pump_dec_profit_max_3 > current_profit >= self.sell_custom_pump_dec_profit_min_3) and (last_candle['sell_pump_48_3_1h']) and (last_candle['sma_200_dec_20']) and (last_candle['close'] < last_candle['ema_200']):
             return True, 'signal_profit_p_d_3'
-        elif (self.sell_custom_pump_dec_profit_max_4.value > current_profit > self.sell_custom_pump_dec_profit_min_4.value) & (last_candle['sma_200_dec_20']) & (last_candle['sell_pump_24_2_1h']):
+        elif (self.sell_custom_pump_dec_profit_max_4 > current_profit >= self.sell_custom_pump_dec_profit_min_4) and (last_candle['sma_200_dec_20']) and (last_candle['sell_pump_24_2_1h']):
             return True, 'signal_profit_p_d_4'
 
         return False, None
 
     def sell_pump_extra(self, current_profit: float, last_candle, max_profit: float) -> tuple:
         # Pumped 48h 1, under EMA200
-        if (self.sell_custom_pump_under_profit_max_1.value > current_profit > self.sell_custom_pump_under_profit_min_1.value) & (last_candle['sell_pump_48_1_1h']) & (last_candle['close'] < last_candle['ema_200']):
+        if (self.sell_custom_pump_under_profit_max_1 > current_profit >= self.sell_custom_pump_under_profit_min_1) and (last_candle['sell_pump_48_1_1h']) and (last_candle['close'] < last_candle['ema_200']):
             return True, 'signal_profit_p_u_1'
 
             # Pumped 36h 2, trail 1
-        elif (last_candle['sell_pump_36_2_1h']) & (self.sell_custom_pump_trail_profit_max_1.value > current_profit > self.sell_custom_pump_trail_profit_min_1.value) & (self.sell_custom_pump_trail_rsi_min_1.value < last_candle['rsi'] < self.sell_custom_pump_trail_rsi_max_1.value) & (max_profit > (current_profit + self.sell_custom_pump_trail_down_1.value)):
+        elif (last_candle['sell_pump_36_2_1h']) and (self.sell_custom_pump_trail_profit_max_1 > current_profit >= self.sell_custom_pump_trail_profit_min_1) and (self.sell_custom_pump_trail_rsi_min_1 < last_candle['rsi_14'] < self.sell_custom_pump_trail_rsi_max_1) and (max_profit > (current_profit + self.sell_custom_pump_trail_down_1)):
             return True, 'signal_profit_p_t_1'
 
         return False, None
 
     def sell_recover(self, current_profit: float, last_candle, max_loss: float) -> tuple:
-        if (max_loss > self.sell_custom_recover_min_loss_1.value) & (current_profit > self.sell_custom_recover_profit_1.value):
+        if (max_loss > self.sell_custom_recover_min_loss_1) and (current_profit >= self.sell_custom_recover_profit_1):
             return True, 'signal_profit_r_1'
 
-        elif (max_loss > self.sell_custom_recover_min_loss_2.value) & (self.sell_custom_recover_profit_max_2.value > current_profit > self.sell_custom_recover_profit_min_2.value) & (last_candle['rsi'] < self.sell_custom_recover_rsi_2.value) & (last_candle['ema_25'] < last_candle['ema_50']):
+        elif (max_loss > self.sell_custom_recover_min_loss_2) and (self.sell_custom_recover_profit_max_2 > current_profit >= self.sell_custom_recover_profit_min_2) and (last_candle['rsi_14'] < self.sell_custom_recover_rsi_2) and (last_candle['ema_25'] < last_candle['ema_50']):
             return True, 'signal_profit_r_2'
 
         return False, None
 
     def sell_r_1(self, current_profit: float, last_candle) -> tuple:
-        if 0.02 > current_profit > 0.012:
-            if last_candle['r_480'] > -1.0:
+        if 0.02 > current_profit >= 0.012:
+            if last_candle['r_480'] > -0.5:
                 return True, 'signal_profit_w_1_1'
-        elif 0.03 > current_profit > 0.02:
-            if last_candle['r_480'] > -1.2:
+        elif 0.03 > current_profit >= 0.02:
+            if last_candle['r_480'] > -0.6:
                 return True, 'signal_profit_w_1_2'
-        elif 0.04 > current_profit > 0.03:
-            if last_candle['r_480'] > -1.4:
+        elif 0.04 > current_profit >= 0.03:
+            if last_candle['r_480'] > -0.7:
                 return True, 'signal_profit_w_1_3'
-        elif 0.05 > current_profit > 0.04:
-            if last_candle['r_480'] > -1.6:
+        elif 0.05 > current_profit >= 0.04:
+            if last_candle['r_480'] > -0.8:
                 return True, 'signal_profit_w_1_4'
-        elif 0.06 > current_profit > 0.05:
-            if last_candle['r_480'] > -1.8:
+        elif 0.06 > current_profit >= 0.05:
+            if last_candle['r_480'] > -0.9:
                 return True, 'signal_profit_w_1_5'
-        elif 0.07 > current_profit > 0.06:
+        elif 0.07 > current_profit >= 0.06:
             if last_candle['r_480'] > -2.0:
                 return True, 'signal_profit_w_1_6'
-        elif 0.08 > current_profit > 0.07:
+        elif 0.08 > current_profit >= 0.07:
             if last_candle['r_480'] > -2.2:
                 return True, 'signal_profit_w_1_7'
-        elif 0.09 > current_profit > 0.08:
+        elif 0.09 > current_profit >= 0.08:
             if last_candle['r_480'] > -2.4:
                 return True, 'signal_profit_w_1_8'
-        elif 0.1 > current_profit > 0.09:
+        elif 0.1 > current_profit >= 0.09:
             if last_candle['r_480'] > -2.6:
                 return True, 'signal_profit_w_1_9'
-        elif 0.12 > current_profit > 0.1:
-            if (last_candle['r_480'] > -8.0) & (last_candle['rsi'] > 72.0):
+        elif 0.12 > current_profit >= 0.1:
+            if (last_candle['r_480'] > -2.5) and (last_candle['rsi_14'] > 72.0):
                 return True, 'signal_profit_w_1_10'
-        elif 0.2 > current_profit > 0.12:
-            if (last_candle['r_480'] > -1.5) & (last_candle['rsi'] > 78.0):
+        elif 0.2 > current_profit >= 0.12:
+            if (last_candle['r_480'] > -2.0) and (last_candle['rsi_14'] > 78.0):
                 return True, 'signal_profit_w_1_11'
-        elif current_profit > 0.2:
-            if (last_candle['r_480'] > -1.0) & (last_candle['rsi'] > 80.0):
+        elif current_profit >= 0.2:
+            if (last_candle['r_480'] > -1.0) and (last_candle['rsi_14'] > 80.0):
                 return True, 'signal_profit_w_1_12'
 
         return False, None
 
     def sell_r_2(self, current_profit: float, last_candle) -> tuple:
-        if 0.02 > current_profit > 0.012:
-            if (last_candle['r_480'] > -2.0) & (last_candle['rsi'] > 79.0) & (last_candle['stochrsi_fastk_96'] > 99.0) & (last_candle['stochrsi_fastd_96'] > 99.0):
+        if 0.02 > current_profit >= 0.012:
+            if (last_candle['r_480'] > -4.0) and (last_candle['rsi_14'] > 79.0) and (last_candle['stochrsi_fastk_96'] > 99.0) and (last_candle['stochrsi_fastd_96'] > 99.0):
                 return True, 'signal_profit_w_2_1'
-        elif 0.03 > current_profit > 0.02:
-            if (last_candle['r_480'] > -2.1) & (last_candle['rsi'] > 79.0) & (last_candle['stochrsi_fastk_96'] > 99.0)  & (last_candle['stochrsi_fastd_96'] > 99.0):
+        elif 0.03 > current_profit >= 0.02:
+            if (last_candle['r_480'] > -4.1) and (last_candle['rsi_14'] > 79.0) and (last_candle['stochrsi_fastk_96'] > 99.0)  and (last_candle['stochrsi_fastd_96'] > 99.0):
                 return True, 'signal_profit_w_2_2'
-        elif 0.04 > current_profit > 0.03:
-            if (last_candle['r_480'] > -2.2) & (last_candle['rsi'] > 79.0) & (last_candle['stochrsi_fastk_96'] > 99.0)  & (last_candle['stochrsi_fastd_96'] > 99.0):
+        elif 0.04 > current_profit >= 0.03:
+            if (last_candle['r_480'] > -4.2) and (last_candle['rsi_14'] > 79.0) and (last_candle['stochrsi_fastk_96'] > 99.0)  and (last_candle['stochrsi_fastd_96'] > 99.0):
                 return True, 'signal_profit_w_2_3'
-        elif 0.05 > current_profit > 0.04:
-            if (last_candle['r_480'] > -2.3) & (last_candle['rsi'] > 79.0) & (last_candle['stochrsi_fastk_96'] > 99.0)  & (last_candle['stochrsi_fastd_96'] > 99.0):
+        elif 0.05 > current_profit >= 0.04:
+            if (last_candle['r_480'] > -4.3) and (last_candle['rsi_14'] > 79.0) and (last_candle['stochrsi_fastk_96'] > 99.0)  and (last_candle['stochrsi_fastd_96'] > 99.0):
                 return True, 'signal_profit_w_2_4'
-        elif 0.06 > current_profit > 0.05:
-            if (last_candle['r_480'] > -2.4) & (last_candle['rsi'] > 79.0) & (last_candle['stochrsi_fastk_96'] > 99.0)  & (last_candle['stochrsi_fastd_96'] > 99.0):
+        elif 0.06 > current_profit >= 0.05:
+            if (last_candle['r_480'] > -4.4) and (last_candle['rsi_14'] > 79.0) and (last_candle['stochrsi_fastk_96'] > 99.0)  and (last_candle['stochrsi_fastd_96'] > 99.0):
                 return True, 'signal_profit_w_2_5'
-        elif 0.07 > current_profit > 0.06:
-            if (last_candle['r_480'] > -2.5) & (last_candle['rsi'] > 79.0) & (last_candle['stochrsi_fastk_96'] > 99.0)  & (last_candle['stochrsi_fastd_96'] > 99.0):
+        elif 0.07 > current_profit >= 0.06:
+            if (last_candle['r_480'] > -4.5) and (last_candle['rsi_14'] > 79.0) and (last_candle['stochrsi_fastk_96'] > 99.0)  and (last_candle['stochrsi_fastd_96'] > 99.0):
                 return True, 'signal_profit_w_2_6'
-        elif 0.08 > current_profit > 0.07:
-            if (last_candle['r_480'] > -34.0) & (last_candle['rsi'] > 80.0) & (last_candle['stochrsi_fastk_96'] > 99.0)  & (last_candle['stochrsi_fastd_96'] > 99.0):
+        elif 0.08 > current_profit >= 0.07:
+            if (last_candle['r_480'] > -5.0) and (last_candle['rsi_14'] > 80.0) and (last_candle['stochrsi_fastk_96'] > 99.0)  and (last_candle['stochrsi_fastd_96'] > 99.0):
                 return True, 'signal_profit_w_2_7'
-        elif 0.09 > current_profit > 0.08:
-            if (last_candle['r_480'] > -3.0) & (last_candle['rsi'] > 80.5) & (last_candle['stochrsi_fastk_96'] > 99.0)  & (last_candle['stochrsi_fastd_96'] > 99.0):
+        elif 0.09 > current_profit >= 0.08:
+            if (last_candle['r_480'] > -5.0) and (last_candle['rsi_14'] > 80.5) and (last_candle['stochrsi_fastk_96'] > 99.0)  and (last_candle['stochrsi_fastd_96'] > 99.0):
                 return True, 'signal_profit_w_2_8'
-        elif 0.1 > current_profit > 0.09:
-            if (last_candle['r_480'] > -2.8) & (last_candle['rsi'] > 80.5) & (last_candle['stochrsi_fastk_96'] > 99.0)  & (last_candle['stochrsi_fastd_96'] > 99.0):
+        elif 0.1 > current_profit >= 0.09:
+            if (last_candle['r_480'] > -4.8) and (last_candle['rsi_14'] > 80.5) and (last_candle['stochrsi_fastk_96'] > 99.0)  and (last_candle['stochrsi_fastd_96'] > 99.0):
                 return True, 'signal_profit_w_2_9'
-        elif 0.12 > current_profit > 0.1:
-            if (last_candle['r_480'] > -2.4) & (last_candle['rsi'] > 80.5) & (last_candle['stochrsi_fastk_96'] > 99.0)  & (last_candle['stochrsi_fastd_96'] > 99.0):
+        elif 0.12 > current_profit >= 0.1:
+            if (last_candle['r_480'] > -4.4) and (last_candle['rsi_14'] > 80.5) and (last_candle['stochrsi_fastk_96'] > 99.0)  and (last_candle['stochrsi_fastd_96'] > 99.0):
                 return True, 'signal_profit_w_2_10'
-        elif 0.2 > current_profit > 0.12:
-            if (last_candle['r_480'] > -2.2) & (last_candle['rsi'] > 81.0) & (last_candle['stochrsi_fastk_96'] > 99.0)  & (last_candle['stochrsi_fastd_96'] > 99.0):
+        elif 0.2 > current_profit >= 0.12:
+            if (last_candle['r_480'] > -3.2) and (last_candle['rsi_14'] > 81.0) and (last_candle['stochrsi_fastk_96'] > 99.0)  and (last_candle['stochrsi_fastd_96'] > 99.0):
                 return True, 'signal_profit_w_2_11'
-        elif current_profit > 0.2:
-            if (last_candle['r_480'] > -2.0) & (last_candle['rsi'] > 81.5) & (last_candle['stochrsi_fastk_96'] > 99.0)  & (last_candle['stochrsi_fastd_96'] > 99.0):
+        elif current_profit >= 0.2:
+            if (last_candle['r_480'] > -3.0) and (last_candle['rsi_14'] > 81.5) and (last_candle['stochrsi_fastk_96'] > 99.0)  and (last_candle['stochrsi_fastd_96'] > 99.0):
                 return True, 'signal_profit_w_2_12'
 
         return False, None
 
     def sell_r_3(self, current_profit: float, last_candle) -> tuple:
-        if 0.02 > current_profit > 0.012:
-            if (last_candle['r_480'] > -6.0) & (last_candle['rsi'] > 74.0) & (last_candle['stochrsi_fastk_96'] > 99.0) & (last_candle['stochrsi_fastd_96'] > 99.0):
+        if 0.02 > current_profit >= 0.012:
+            if (last_candle['r_480'] > -3.0) and (last_candle['rsi_14'] > 74.0) and (last_candle['stochrsi_fastk_96'] > 99.0) and (last_candle['stochrsi_fastd_96'] > 99.0):
                 return True, 'signal_profit_w_3_1'
-        elif 0.03 > current_profit > 0.02:
-            if (last_candle['r_480'] > -8.0) & (last_candle['rsi'] > 74.0) & (last_candle['stochrsi_fastk_96'] > 99.0)  & (last_candle['stochrsi_fastd_96'] > 99.0):
+        elif 0.03 > current_profit >= 0.02:
+            if (last_candle['r_480'] > -3.5) and (last_candle['rsi_14'] > 74.0) and (last_candle['stochrsi_fastk_96'] > 99.0)  and (last_candle['stochrsi_fastd_96'] > 99.0):
                 return True, 'signal_profit_w_3_2'
-        elif 0.04 > current_profit > 0.03:
-            if (last_candle['r_480'] > -29.0) & (last_candle['rsi'] > 74.0) & (last_candle['stochrsi_fastk_96'] > 99.0)  & (last_candle['stochrsi_fastd_96'] > 99.0):
+        elif 0.04 > current_profit >= 0.03:
+            if (last_candle['r_480'] > -4.0) and (last_candle['rsi_14'] > 74.0) and (last_candle['stochrsi_fastk_96'] > 99.0)  and (last_candle['stochrsi_fastd_96'] > 99.0):
                 return True, 'signal_profit_w_3_3'
-        elif 0.05 > current_profit > 0.04:
-            if (last_candle['r_480'] > -30.0) & (last_candle['rsi'] > 79.0) & (last_candle['stochrsi_fastk_96'] > 99.0)  & (last_candle['stochrsi_fastd_96'] > 99.0):
+        elif 0.05 > current_profit >= 0.04:
+            if (last_candle['r_480'] > -4.5) and (last_candle['rsi_14'] > 79.0) and (last_candle['stochrsi_fastk_96'] > 99.0)  and (last_candle['stochrsi_fastd_96'] > 99.0):
                 return True, 'signal_profit_w_3_4'
 
         return False, None
 
     def sell_r_4(self, current_profit: float, last_candle) -> tuple:
-        if (0.02 > current_profit > 0.012):
-            if (last_candle['r_480'] > -3.0) & (last_candle['rsi'] > 68.0) & (last_candle['cti'] > 0.9):
+        if (0.02 > current_profit >= 0.012):
+            if (last_candle['r_480'] > -2.0) and (last_candle['rsi_14'] > 78.0) and (last_candle['cti'] > 0.9):
                 return True, 'signal_profit_w_4_1'
-        elif (0.03 > current_profit > 0.02):
-            if (last_candle['r_480'] > -3.5) & (last_candle['rsi'] > 68.0) & (last_candle['cti'] > 0.9):
+        elif (0.03 > current_profit >= 0.02):
+            if (last_candle['r_480'] > -2.5) and (last_candle['rsi_14'] > 78.0) and (last_candle['cti'] > 0.9):
                 return True, 'signal_profit_w_4_2'
-        elif (0.04 > current_profit > 0.03):
-            if (last_candle['r_480'] > -4.0) & (last_candle['rsi'] > 68.0) & (last_candle['cti'] > 0.9):
+        elif (0.04 > current_profit >= 0.03):
+            if (last_candle['r_480'] > -3.0) and (last_candle['rsi_14'] > 78.0) and (last_candle['cti'] > 0.9):
                 return True, 'signal_profit_w_4_3'
-        elif (0.05 > current_profit > 0.04):
-            if (last_candle['r_480'] > -4.5) & (last_candle['rsi'] > 68.0) & (last_candle['cti'] > 0.9):
+        elif (0.05 > current_profit >= 0.04):
+            if (last_candle['r_480'] > -3.5) and (last_candle['rsi_14'] > 78.0) and (last_candle['cti'] > 0.9):
                 return True, 'signal_profit_w_4_4'
-        elif (0.06 > current_profit > 0.05):
-            if (last_candle['r_480'] > -24.0) & (last_candle['rsi'] > 68.0) & (last_candle['cti'] > 0.9):
+        elif (0.06 > current_profit >= 0.05):
+            if (last_candle['r_480'] > -4.0) and (last_candle['rsi_14'] > 78.0) and (last_candle['cti'] > 0.9):
                 return True, 'signal_profit_w_4_5'
-        elif (0.07 > current_profit > 0.06):
-            if (last_candle['r_480'] > -26.0) & (last_candle['rsi'] > 79.0) & (last_candle['cti'] > 0.9):
+        elif (0.07 > current_profit >= 0.06):
+            if (last_candle['r_480'] > -4.5) and (last_candle['rsi_14'] > 79.0) and (last_candle['cti'] > 0.9):
                 return True, 'signal_profit_w_4_6'
-        elif (0.08 > current_profit > 0.07):
-            if (last_candle['r_480'] > -20.0) & (last_candle['rsi'] > 79.0) & (last_candle['cti'] > 0.9):
+        elif (0.08 > current_profit >= 0.07):
+            if (last_candle['r_480'] > -5.0) and (last_candle['rsi_14'] > 79.0) and (last_candle['cti'] > 0.9):
                 return True, 'signal_profit_w_4_7'
-        elif (0.09 > current_profit > 0.08):
-            if (last_candle['r_480'] > -18.0) & (last_candle['rsi'] > 79.0) & (last_candle['cti'] > 0.9):
+        elif (0.09 > current_profit >= 0.08):
+            if (last_candle['r_480'] > -5.5) and (last_candle['rsi_14'] > 79.0) and (last_candle['cti'] > 0.9):
                 return True, 'signal_profit_w_4_8'
-        elif (0.1 > current_profit > 0.09):
-            if (last_candle['r_480'] > -16.0) & (last_candle['rsi'] > 79.0) & (last_candle['cti'] > 0.9):
+        elif (0.1 > current_profit >= 0.09):
+            if (last_candle['r_480'] > -4.0) and (last_candle['rsi_14'] > 79.0) and (last_candle['cti'] > 0.9):
                 return True, 'signal_profit_w_4_9'
-        elif (0.12 > current_profit > 0.1):
-            if (last_candle['r_480'] > -4.0) & (last_candle['rsi'] > 79.0) & (last_candle['cti'] > 0.9):
+        elif (0.12 > current_profit >= 0.1):
+            if (last_candle['r_480'] > -3.0) and (last_candle['rsi_14'] > 79.0) and (last_candle['cti'] > 0.9):
                 return True, 'signal_profit_w_4_10'
-        elif (0.2 > current_profit > 0.12):
-            if (last_candle['r_480'] > -3.0) & (last_candle['rsi'] > 80.0) & (last_candle['cti'] > 0.9):
+        elif (0.2 > current_profit >= 0.12):
+            if (last_candle['r_480'] > -2.5) and (last_candle['rsi_14'] > 80.0) and (last_candle['cti'] > 0.9):
                 return True, 'signal_profit_w_4_11'
-        elif (current_profit > 0.2):
-            if (last_candle['r_480'] > -2.0) & (last_candle['rsi'] > 80.0) & (last_candle['cti'] > 0.9):
+        elif (current_profit >= 0.2):
+            if (last_candle['r_480'] > -2.0) and (last_candle['rsi_14'] > 80.0) and (last_candle['cti'] > 0.9):
                 return True, 'signal_profit_w_4_12'
 
         return False, None
 
-    def sell_quick_mode(self, current_profit: float, max_profit:float, last_candle, buy_signal_candle) -> tuple:
-        if buy_signal_candle['buy_condition_32'] or buy_signal_candle['buy_condition_33'] or buy_signal_candle['buy_condition_34']:
-            if (0.06 > current_profit > 0.02) & (last_candle['rsi'] > 79.0):
-                return True, 'signal_profit_q_1'
 
-            if (0.06 > current_profit > 0.02) & (last_candle['cti'] > 0.9):
-                return True, 'signal_profit_q_2'
+    def mark_profit_target(self, pair: str, trade: "Trade", current_time: "datetime", current_rate: float, current_profit: float, last_candle, previous_candle_1) -> tuple:
+        # if self.profit_target_1_enable:
+        #     if (current_profit > 0) and (last_candle['zlema_4_lowKF'] > last_candle['lowKF']) and (previous_candle_1['zlema_4_lowKF'] < previous_candle_1['lowKF']) and (last_candle['cci'] > -100) and (last_candle['hrsi'] > 70):
+        #         return pair, "mark_profit_target_01"
+        return None, None
 
-            if (current_profit < -0.1):
-                return True, 'signal_stoploss_q_1'
+    def sell_profit_target(self, pair: str, trade: "Trade", current_time: "datetime", current_rate: float, current_profit: float, last_candle, previous_candle_1, previous_rate, previous_sell_reason, previous_time_profit_reached) -> tuple:
+        # if self.profit_target_1_enable and previous_sell_reason == "mark_profit_target_01":
+        #     if (current_profit > 0) and (current_rate < (previous_rate - 0.005)):
+        #         return True, 'sell_profit_target_01'
+
+        return False, None
+
+    def sell_quick_mode(self, current_profit: float, max_profit:float, last_candle, previous_candle_1) -> tuple:
+        if (0.06 > current_profit > 0.02) and (last_candle['rsi_14'] > 80.0):
+            return True, 'signal_profit_q_1'
+
+        if (0.06 > current_profit > 0.02) and (last_candle['cti'] > 0.95):
+            return True, 'signal_profit_q_2'
+
+        if (last_candle['close'] < last_candle['atr_high_thresh_q']) and (previous_candle_1['close'] > previous_candle_1['atr_high_thresh_q']):
+            if (0.05 > current_profit > 0.02):
+                return True, 'signal_profit_q_atr'
+            elif (current_profit < -0.08):
+                return True, 'signal_stoploss_q_atr'
+
+        if (0.04 > current_profit > 0.02) and (last_candle['pm'] <= last_candle['pmax_thresh']) and (last_candle['close'] > last_candle['sma_21'] * 1.1):
+            return True, 'signal_profit_q_pmax_bull'
+        if (0.045 > current_profit > 0.003) and (last_candle['pm'] > last_candle['pmax_thresh']) and (last_candle['close'] > last_candle['sma_21'] * 1.016):
+            return True, 'signal_profit_q_pmax_bear'
+
+        return False, None
+
+    def sell_ichi(self, current_profit: float, max_profit:float, max_loss:float, last_candle, previous_candle_1, trade: 'Trade', current_time: 'datetime') -> tuple:
+        if (0.0 < current_profit < 0.05) and (current_time - timedelta(minutes=1440) > trade.open_date_utc) and (last_candle['rsi_14'] > 78.0):
+            return True, 'signal_profit_ichi_u'
+        elif (-0.03 < current_profit < -0.0) and (current_time - timedelta(minutes=1440) > trade.open_date_utc) and (last_candle['rsi_14'] > 75.0):
+            return True, 'signal_stoploss_ichi_u'
+
+        elif (max_loss > 0.07) and (current_profit > 0.02):
+            return True, 'signal_profit_ichi_r_0'
+        elif (max_loss > 0.06) and (current_profit > 0.03):
+            return True, 'signal_profit_ichi_r_1'
+        elif (max_loss > 0.05) and (current_profit > 0.04):
+            return True, 'signal_profit_ichi_r_2'
+        elif (max_loss > 0.04) and (current_profit > 0.05):
+            return True, 'signal_profit_ichi_r_3'
+        elif (max_loss > 0.03) and (current_profit > 0.06):
+            return True, 'signal_profit_ichi_r_4'
+
+        elif (0.05 < current_profit < 0.1) and (current_time - timedelta(minutes=720) > trade.open_date_utc):
+            return True, 'signal_profit_ichi_slow'
+
+        elif (0.07 < current_profit < 0.1) and (max_profit-current_profit > 0.025) and (max_profit > 0.1):
+            return True, 'signal_profit_ichi_t'
+
+        elif (current_profit < -0.1):
+            return True, 'signal_stoploss_ichi'
 
         return False, None
 
     def custom_sell(self, pair: str, trade: 'Trade', current_time: 'datetime', current_rate: float,
                     current_profit: float, **kwargs):
         dataframe, _ = self.dp.get_analyzed_dataframe(pair, self.timeframe)
-        last_candle = dataframe.iloc[-1].squeeze()
-        previous_candle_1 = dataframe.iloc[-2].squeeze()
-        previous_candle_2 = dataframe.iloc[-3].squeeze()
-        previous_candle_3 = dataframe.iloc[-4].squeeze()
-        previous_candle_4 = dataframe.iloc[-5].squeeze()
-        previous_candle_5 = dataframe.iloc[-6].squeeze()
+        last_candle = dataframe.iloc[-1]
+        previous_candle_1 = dataframe.iloc[-2]
+        previous_candle_2 = dataframe.iloc[-3]
+        previous_candle_3 = dataframe.iloc[-4]
+        previous_candle_4 = dataframe.iloc[-5]
+        previous_candle_5 = dataframe.iloc[-6]
 
-        trade_open_date = timeframe_to_prev_date(self.timeframe, trade.open_date_utc)
-        buy_signal = dataframe.loc[dataframe['date'] < trade_open_date]
-        if not buy_signal.empty:
-            buy_signal_candle = buy_signal.iloc[-1].squeeze()
-
+        buy_tag = 'empty'
+        if hasattr(trade, 'buy_tag') and trade.buy_tag is not None:
+            buy_tag = trade.buy_tag
+        else:
+            trade_open_date = timeframe_to_prev_date(self.timeframe, trade.open_date_utc)
+            buy_signal = dataframe.loc[dataframe['date'] < trade_open_date]
+            if not buy_signal.empty:
+                buy_signal_candle = buy_signal.iloc[-1]
+                buy_tag = buy_signal_candle['buy_tag'] if buy_signal_candle['buy_tag'] != '' else 'empty'
+        buy_tags = buy_tag.split()
         max_profit = ((trade.max_rate - trade.open_rate) / trade.open_rate)
         max_loss = ((trade.open_rate - trade.min_rate) / trade.min_rate)
 
         # Quick sell mode
-        if not buy_signal.empty:
-            sell, signal_name = self.sell_quick_mode(current_profit, max_profit, last_candle, buy_signal_candle)
+        if all(c in ['32', '33', '34', '35', '36', '37', '38', '39', '40'] for c in buy_tags):
+            sell, signal_name = self.sell_quick_mode(current_profit, max_profit, last_candle, previous_candle_1)
             if sell and (signal_name is not None):
-                return signal_name
+                return signal_name + ' ( ' + buy_tag + ')'
+
+        # Ichi Trade management
+        if all(c in ['39'] for c in buy_tags):
+            sell, signal_name = self.sell_ichi(current_profit, max_profit, max_loss, last_candle, previous_candle_1, trade, current_time)
+            if sell and (signal_name is not None):
+                return signal_name + ' ( ' + buy_tag + ')'
 
         # Over EMA200, main profit targets
         sell, signal_name = self.sell_over_main(current_profit, last_candle)
         if sell and (signal_name is not None):
-            return signal_name
+            return signal_name + ' ( ' + buy_tag + ')'
 
         # Under EMA200, main profit targets
         sell, signal_name = self.sell_under_main(current_profit, last_candle)
         if sell and (signal_name is not None):
-            return signal_name
+            return signal_name + ' ( ' + buy_tag + ')'
 
         # The pair is pumped
         sell, signal_name = self.sell_pump_main(current_profit, last_candle)
         if sell and (signal_name is not None):
-            return signal_name
+            return signal_name + ' ( ' + buy_tag + ')'
 
         # The pair is descending
         sell, signal_name = self.sell_dec_main(current_profit, last_candle)
         if sell and (signal_name is not None):
-            return signal_name
+            return signal_name + ' ( ' + buy_tag + ')'
 
         # Trailing
         sell, signal_name = self.sell_trail_main(current_profit, last_candle, max_profit)
         if sell and (signal_name is not None):
-            return signal_name
+            return signal_name + ' ( ' + buy_tag + ')'
 
         # Duration based
         sell, signal_name = self.sell_duration_main(current_profit, last_candle, trade, current_time)
         if sell and (signal_name is not None):
-            return signal_name
+            return signal_name + ' ( ' + buy_tag + ')'
 
         # Under EMA200, exit with any profit
         sell, signal_name = self.sell_under_min(current_profit, last_candle)
         if sell and (signal_name is not None):
-            return signal_name
+            return signal_name + ' ( ' + buy_tag + ')'
 
         # Stoplosses
-        sell, signal_name = self.sell_stoploss(current_profit, last_candle, trade, current_time, max_loss, max_profit)
+        sell, signal_name = self.sell_stoploss(current_profit, last_candle, previous_candle_1)
         if sell and (signal_name is not None):
-            return signal_name
+            return signal_name + ' ( ' + buy_tag + ')'
 
         # Pumped descending pairs
         sell, signal_name = self.sell_pump_dec(current_profit, last_candle)
         if sell and (signal_name is not None):
-            return signal_name
+            return signal_name + ' ( ' + buy_tag + ')'
 
         # Extra sells for pumped pairs
         sell, signal_name = self.sell_pump_extra(current_profit, last_candle, max_profit)
         if sell and (signal_name is not None):
-            return signal_name
+            return signal_name + ' ( ' + buy_tag + ')'
 
         # Extra sells for trades that recovered
         sell, signal_name = self.sell_recover(current_profit, last_candle, max_loss)
         if sell and (signal_name is not None):
-            return signal_name
+            return signal_name + ' ( ' + buy_tag + ')'
 
         # Williams %R based sell 1
         sell, signal_name = self.sell_r_1(current_profit, last_candle)
         if sell and (signal_name is not None):
-            return signal_name
+            return signal_name + ' ( ' + buy_tag + ')'
 
         # Williams %R based sell 2
         sell, signal_name = self.sell_r_2(current_profit, last_candle)
         if sell and (signal_name is not None):
-            return signal_name
+            return signal_name + ' ( ' + buy_tag + ')'
 
         # Williams %R based sell 3
         sell, signal_name = self.sell_r_3(current_profit, last_candle)
         if sell and (signal_name is not None):
-            return signal_name
+            return signal_name + ' ( ' + buy_tag + ')'
 
         # Williams %R based sell 4, plus CTI
         sell, signal_name = self.sell_r_4(current_profit, last_candle)
         if (sell) and (signal_name is not None):
-            return signal_name
+            return signal_name + ' ( ' + buy_tag + ')'
+
+        # Profit Target Signal
+        # Check if pair exist on target_profit_cache
+        if self.target_profit_cache is not None and pair in self.target_profit_cache.data:
+            previous_rate = self.target_profit_cache.data[pair]['rate']
+            previous_sell_reason = self.target_profit_cache.data[pair]['sell_reason']
+            previous_time_profit_reached = datetime.fromisoformat(self.target_profit_cache.data[pair]['time_profit_reached'])
+
+            sell, signal_name = self.sell_profit_target(pair, trade, current_time, current_rate, current_profit, last_candle, previous_candle_1, previous_rate, previous_sell_reason, previous_time_profit_reached)
+            if sell and signal_name is not None:
+                return f"{signal_name} ( {buy_tag} )"
+
+        pair, mark_signal = self.mark_profit_target(pair, trade, current_time, current_rate, current_profit, last_candle, previous_candle_1)
+        if pair:
+            self._set_profit_target(pair, mark_signal, current_rate, current_time)
 
         # Sell signal 1
-        if self.sell_condition_1_enable.value & (last_candle['rsi'] > self.sell_rsi_bb_1.value) & (last_candle['close'] > last_candle['bb20_2_upp']) & (previous_candle_1['close'] > previous_candle_1['bb20_2_upp']) & (previous_candle_2['close'] > previous_candle_2['bb20_2_upp']) & (previous_candle_3['close'] > previous_candle_3['bb20_2_upp']) & (previous_candle_4['close'] > previous_candle_4['bb20_2_upp']) & (previous_candle_5['close'] > previous_candle_5['bb20_2_upp']):
+        if self.sell_condition_1_enable and (last_candle['rsi_14'] > self.sell_rsi_bb_1) and (last_candle['close'] > last_candle['bb20_2_upp']) and (previous_candle_1['close'] > previous_candle_1['bb20_2_upp']) and (previous_candle_2['close'] > previous_candle_2['bb20_2_upp']) and (previous_candle_3['close'] > previous_candle_3['bb20_2_upp']) and (previous_candle_4['close'] > previous_candle_4['bb20_2_upp']) and (previous_candle_5['close'] > previous_candle_5['bb20_2_upp']):
             if (last_candle['close'] > last_candle['ema_200']):
                 if (current_profit > 0.0):
-                    return 'sell_signal_1_1_1'
-                elif (max_loss > 0.1):
-                    return 'sell_signal_1_1_2'
+                    return 'sell_signal_1_1_1' + ' ( ' + buy_tag + ')'
             else:
-                return 'sell_signal_1_2'
+                if (current_profit > 0.0):
+                    return 'sell_signal_1_2_1' + ' ( ' + buy_tag + ')'
+                elif (max_loss > 0.25):
+                    return 'sell_signal_1_2_2' + ' ( ' + buy_tag + ')'
 
         # Sell signal 2
-        elif (self.sell_condition_2_enable.value) & (last_candle['rsi'] > self.sell_rsi_bb_2.value) & (last_candle['close'] > last_candle['bb20_2_upp']) & (previous_candle_1['close'] > previous_candle_1['bb20_2_upp']) & (previous_candle_2['close'] > previous_candle_2['bb20_2_upp']):
+        elif (self.sell_condition_2_enable) and (last_candle['rsi_14'] > self.sell_rsi_bb_2) and (last_candle['close'] > last_candle['bb20_2_upp']) and (previous_candle_1['close'] > previous_candle_1['bb20_2_upp']) and (previous_candle_2['close'] > previous_candle_2['bb20_2_upp']):
             if (last_candle['close'] > last_candle['ema_200']):
                 if (current_profit > 0.0):
-                    return 'sell_signal_2_1_1'
-                elif (max_loss > 0.07):
-                    return 'sell_signal_2_1_2'
+                    return 'sell_signal_2_1_1' + ' ( ' + buy_tag + ')'
             else:
-                return 'sell_signal_2_2'
+                if (current_profit > 0.0):
+                    return 'sell_signal_2_2_1' + ' ( ' + buy_tag + ')'
+                elif (max_loss > 0.25):
+                    return 'sell_signal_2_2_2' + ' ( ' + buy_tag + ')'
 
         # Sell signal 4
-        elif self.sell_condition_4_enable.value & (last_candle['rsi'] > self.sell_dual_rsi_rsi_4.value) & (last_candle['rsi_1h'] > self.sell_dual_rsi_rsi_1h_4.value):
-            return 'sell_signal_4'
+        elif self.sell_condition_4_enable and (last_candle['rsi_14'] > self.sell_dual_rsi_rsi_4) and (last_candle['rsi_14_1h'] > self.sell_dual_rsi_rsi_1h_4):
+            if (last_candle['close'] > last_candle['ema_200']):
+                if (current_profit > 0.0):
+                    return 'sell_signal_4_1_1' + ' ( ' + buy_tag + ')'
+            else:
+                if (current_profit > 0.0):
+                    return 'sell_signal_4_2_1' + ' ( ' + buy_tag + ')'
+                elif (max_loss > 0.25):
+                    return 'sell_signal_4_2_2' + ' ( ' + buy_tag + ')'
 
         # Sell signal 6
-        elif self.sell_condition_6_enable.value & (last_candle['close'] < last_candle['ema_200']) & (last_candle['close'] > last_candle['ema_50']) & (last_candle['rsi'] > self.sell_rsi_under_6.value):
-            return 'sell_signal_6'
+        elif self.sell_condition_6_enable and (last_candle['close'] < last_candle['ema_200']) and (last_candle['close'] > last_candle['ema_50']) and (last_candle['rsi_14'] > self.sell_rsi_under_6):
+            if (current_profit > 0.0):
+                return 'sell_signal_6_1' + ' ( ' + buy_tag + ')'
+            elif (max_loss > 0.25):
+                return 'sell_signal_6_2' + ' ( ' + buy_tag + ')'
 
         # Sell signal 7
-        elif self.sell_condition_7_enable.value & (last_candle['rsi_1h'] > self.sell_rsi_1h_7.value) & (last_candle['crossed_below_ema_12_26']):
-            return 'sell_signal_7'
+        elif self.sell_condition_7_enable and (last_candle['rsi_14_1h'] > self.sell_rsi_1h_7) and (last_candle['crossed_below_ema_12_26']):
+            if (last_candle['close'] > last_candle['ema_200']):
+                if (current_profit > 0.0):
+                    return 'sell_signal_7_1_1' + ' ( ' + buy_tag + ')'
+            else:
+                if (current_profit > 0.0):
+                    return 'sell_signal_7_2_1' + ' ( ' + buy_tag + ')'
+                elif (max_loss > 0.25):
+                    return 'sell_signal_7_2_2' + ' ( ' + buy_tag + ')'
 
         # Sell signal 8
-        elif self.sell_condition_8_enable.value & (last_candle['close'] > last_candle['bb20_2_upp_1h'] * self.sell_bb_relative_8.value):
-            return 'sell_signal_8'
+        elif self.sell_condition_8_enable and (last_candle['close'] > last_candle['bb20_2_upp_1h'] * self.sell_bb_relative_8):
+            if (last_candle['close'] > last_candle['ema_200']):
+                if (current_profit > 0.0):
+                    return 'sell_signal_8_1_1' + ' ( ' + buy_tag + ')'
+            else:
+                if (current_profit > 0.0):
+                    return 'sell_signal_8_2_1' + ' ( ' + buy_tag + ')'
+                elif (max_loss > 0.25):
+                    return 'sell_signal_8_2_2' + ' ( ' + buy_tag + ')'
 
         return None
 
@@ -2842,11 +2844,10 @@ class NostalgiaForInfinityNext(IStrategy):
         :param method: High to Low / Open to Close
         :param length: int The length to look back
         """
-        df = dataframe.copy()
         if method == 'HL':
-            return (df['high'].rolling(length).max() - df['low'].rolling(length).min()) / df['low'].rolling(length).min()
+            return (dataframe['high'].rolling(length).max() - dataframe['low'].rolling(length).min()) / dataframe['low'].rolling(length).min()
         elif method == 'OC':
-            return (df['open'].rolling(length).max() - df['close'].rolling(length).min()) / df['close'].rolling(length).min()
+            return (dataframe['open'].rolling(length).max() - dataframe['close'].rolling(length).min()) / dataframe['close'].rolling(length).min()
         else:
             raise ValueError(f"Method {method} not defined!")
 
@@ -2857,11 +2858,10 @@ class NostalgiaForInfinityNext(IStrategy):
         :param dataframe: DataFrame The original OHLC dataframe
         :param length: int The length to look back
         """
-        df = dataframe.copy()
         if length == 0:
-            return (df['open'] - df['close']) / df['close']
+            return (dataframe['open'] - dataframe['close']) / dataframe['close']
         else:
-            return (df['open'].rolling(length).max() - df['close']) / df['close']
+            return (dataframe['open'].rolling(length).max() - dataframe['close']) / dataframe['close']
 
     def range_maxgap(self, dataframe: DataFrame, length: int) -> float:
         """
@@ -2870,8 +2870,7 @@ class NostalgiaForInfinityNext(IStrategy):
         :param dataframe: DataFrame The original OHLC dataframe
         :param length: int The length to look back
         """
-        df = dataframe.copy()
-        return df['open'].rolling(length).max() - df['close'].rolling(length).min()
+        return dataframe['open'].rolling(length).max() - dataframe['close'].rolling(length).min()
 
     def range_maxgap_adjusted(self, dataframe: DataFrame, length: int, adjustment: float) -> float:
         """
@@ -2890,8 +2889,7 @@ class NostalgiaForInfinityNext(IStrategy):
         :param dataframe: DataFrame The original OHLC dataframe
         :param length: int The length to look back
         """
-        df = dataframe.copy()
-        return df['close'] - df['close'].rolling(length).min()
+        return dataframe['close'] - dataframe['close'].rolling(length).min()
 
     def safe_pump(self, dataframe: DataFrame, length: int, thresh: float, pull_thresh: float) -> bool:
         """
@@ -2902,8 +2900,7 @@ class NostalgiaForInfinityNext(IStrategy):
         :param thresh: int Maximum percentage change threshold
         :param pull_thresh: int Pullback from interval maximum threshold
         """
-        df = dataframe.copy()
-        return (df[f'oc_pct_change_{length}'] < thresh) | (self.range_maxgap_adjusted(df, length, pull_thresh) > self.range_height(df, length))
+        return (dataframe[f'oc_pct_change_{length}'] < thresh) | (self.range_maxgap_adjusted(dataframe, length, pull_thresh) > self.range_height(dataframe, length))
 
     def safe_dips(self, dataframe: DataFrame, thresh_0, thresh_2, thresh_12, thresh_144) -> bool:
         """
@@ -2925,8 +2922,8 @@ class NostalgiaForInfinityNext(IStrategy):
         pairs = self.dp.current_whitelist()
         # Assign tf to each pair so they can be downloaded and cached for strategy.
         informative_pairs = [(pair, self.info_timeframe) for pair in pairs]
-        informative_pairs.append(('BTC/USDT', self.timeframe))
-        informative_pairs.append(('BTC/USDT', self.info_timeframe))
+        informative_pairs.append((f"BTC/{self.config['stake_currency']}", self.timeframe))
+        informative_pairs.append((f"BTC/{self.config['stake_currency']}", self.info_timeframe))
         return informative_pairs
 
     def informative_1h_indicators(self, dataframe: DataFrame, metadata: dict) -> DataFrame:
@@ -2950,7 +2947,7 @@ class NostalgiaForInfinityNext(IStrategy):
         informative_1h['sma_200_dec_20'] = informative_1h['sma_200'] < informative_1h['sma_200'].shift(20)
 
         # RSI
-        informative_1h['rsi'] = ta.RSI(informative_1h, timeperiod=14)
+        informative_1h['rsi_14'] = ta.RSI(informative_1h, timeperiod=14)
 
         # BB
         bollinger = qtpylib.bollinger_bands(qtpylib.typical_price(informative_1h), window=20, stds=2)
@@ -2964,6 +2961,34 @@ class NostalgiaForInfinityNext(IStrategy):
         # Williams %R
         informative_1h['r_480'] = williams_r(informative_1h, period=480)
 
+        # CTI
+        informative_1h['cti'] = pta.cti(informative_1h["close"], length=20)
+
+        # CRSI (3, 2, 100)
+        crsi_closechange = informative_1h['close'] / informative_1h['close'].shift(1)
+        crsi_updown = np.where(crsi_closechange.gt(1), 1.0, np.where(crsi_closechange.lt(1), -1.0, 0.0))
+        informative_1h['crsi'] =  (ta.RSI(informative_1h['close'], timeperiod=3) + ta.RSI(crsi_updown, timeperiod=2) + ta.ROC(informative_1h['close'], 100)) / 3
+
+        # Ichimoku
+        ichi = ichimoku(informative_1h, conversion_line_period=20, base_line_periods=60, laggin_span=120, displacement=30)
+        informative_1h['chikou_span'] = ichi['chikou_span']
+        informative_1h['tenkan_sen'] = ichi['tenkan_sen']
+        informative_1h['kijun_sen'] = ichi['kijun_sen']
+        informative_1h['senkou_a'] = ichi['senkou_span_a']
+        informative_1h['senkou_b'] = ichi['senkou_span_b']
+        informative_1h['leading_senkou_span_a'] = ichi['leading_senkou_span_a']
+        informative_1h['leading_senkou_span_b'] = ichi['leading_senkou_span_b']
+        informative_1h['chikou_span_greater'] = (informative_1h['chikou_span'] > informative_1h['senkou_a']).shift(30).fillna(False)
+        informative_1h.loc[:, 'cloud_top'] = informative_1h.loc[:, ['senkou_a', 'senkou_b']].max(axis=1)
+
+        # EFI - Elders Force Index
+        informative_1h['efi'] = pta.efi(informative_1h["close"], informative_1h["volume"], length=13)
+
+        # SSL
+        ssl_down, ssl_up = SSLChannels(informative_1h, 10)
+        informative_1h['ssl_down'] = ssl_down
+        informative_1h['ssl_up'] = ssl_up
+
         # Pump protections
         informative_1h['hl_pct_change_48'] = self.range_percent_change(informative_1h, 'HL', 48)
         informative_1h['hl_pct_change_36'] = self.range_percent_change(informative_1h, 'HL', 36)
@@ -2976,79 +3001,79 @@ class NostalgiaForInfinityNext(IStrategy):
         informative_1h['hl_pct_change_5'] = self.range_percent_change(informative_1h, 'HL', 5)
         informative_1h['low_5'] = informative_1h['low'].shift().rolling(5).min()
 
-        informative_1h['safe_pump_24_10'] = self.safe_pump(informative_1h, 24, self.buy_pump_threshold_10_24.value, self.buy_pump_pull_threshold_10_24.value)
-        informative_1h['safe_pump_36_10'] = self.safe_pump(informative_1h, 36, self.buy_pump_threshold_10_36.value, self.buy_pump_pull_threshold_10_36.value)
-        informative_1h['safe_pump_48_10'] = self.safe_pump(informative_1h, 48, self.buy_pump_threshold_10_48.value, self.buy_pump_pull_threshold_10_48.value)
+        informative_1h['safe_pump_24_10'] = self.safe_pump(informative_1h, 24, self.buy_pump_threshold_10_24, self.buy_pump_pull_threshold_10_24)
+        informative_1h['safe_pump_36_10'] = self.safe_pump(informative_1h, 36, self.buy_pump_threshold_10_36, self.buy_pump_pull_threshold_10_36)
+        informative_1h['safe_pump_48_10'] = self.safe_pump(informative_1h, 48, self.buy_pump_threshold_10_48, self.buy_pump_pull_threshold_10_48)
 
-        informative_1h['safe_pump_24_20'] = self.safe_pump(informative_1h, 24, self.buy_pump_threshold_20_24.value, self.buy_pump_pull_threshold_20_24.value)
-        informative_1h['safe_pump_36_20'] = self.safe_pump(informative_1h, 36, self.buy_pump_threshold_20_36.value, self.buy_pump_pull_threshold_20_36.value)
-        informative_1h['safe_pump_48_20'] = self.safe_pump(informative_1h, 48, self.buy_pump_threshold_20_48.value, self.buy_pump_pull_threshold_20_48.value)
+        informative_1h['safe_pump_24_20'] = self.safe_pump(informative_1h, 24, self.buy_pump_threshold_20_24, self.buy_pump_pull_threshold_20_24)
+        informative_1h['safe_pump_36_20'] = self.safe_pump(informative_1h, 36, self.buy_pump_threshold_20_36, self.buy_pump_pull_threshold_20_36)
+        informative_1h['safe_pump_48_20'] = self.safe_pump(informative_1h, 48, self.buy_pump_threshold_20_48, self.buy_pump_pull_threshold_20_48)
 
-        informative_1h['safe_pump_24_30'] = self.safe_pump(informative_1h, 24, self.buy_pump_threshold_30_24.value, self.buy_pump_pull_threshold_30_24.value)
-        informative_1h['safe_pump_36_30'] = self.safe_pump(informative_1h, 36, self.buy_pump_threshold_30_36.value, self.buy_pump_pull_threshold_30_36.value)
-        informative_1h['safe_pump_48_30'] = self.safe_pump(informative_1h, 48, self.buy_pump_threshold_30_48.value, self.buy_pump_pull_threshold_30_48.value)
+        informative_1h['safe_pump_24_30'] = self.safe_pump(informative_1h, 24, self.buy_pump_threshold_30_24, self.buy_pump_pull_threshold_30_24)
+        informative_1h['safe_pump_36_30'] = self.safe_pump(informative_1h, 36, self.buy_pump_threshold_30_36, self.buy_pump_pull_threshold_30_36)
+        informative_1h['safe_pump_48_30'] = self.safe_pump(informative_1h, 48, self.buy_pump_threshold_30_48, self.buy_pump_pull_threshold_30_48)
 
-        informative_1h['safe_pump_24_40'] = self.safe_pump(informative_1h, 24, self.buy_pump_threshold_40_24.value, self.buy_pump_pull_threshold_40_24.value)
-        informative_1h['safe_pump_36_40'] = self.safe_pump(informative_1h, 36, self.buy_pump_threshold_40_36.value, self.buy_pump_pull_threshold_40_36.value)
-        informative_1h['safe_pump_48_40'] = self.safe_pump(informative_1h, 48, self.buy_pump_threshold_40_48.value, self.buy_pump_pull_threshold_40_48.value)
+        informative_1h['safe_pump_24_40'] = self.safe_pump(informative_1h, 24, self.buy_pump_threshold_40_24, self.buy_pump_pull_threshold_40_24)
+        informative_1h['safe_pump_36_40'] = self.safe_pump(informative_1h, 36, self.buy_pump_threshold_40_36, self.buy_pump_pull_threshold_40_36)
+        informative_1h['safe_pump_48_40'] = self.safe_pump(informative_1h, 48, self.buy_pump_threshold_40_48, self.buy_pump_pull_threshold_40_48)
 
-        informative_1h['safe_pump_24_50'] = self.safe_pump(informative_1h, 24, self.buy_pump_threshold_50_24.value, self.buy_pump_pull_threshold_50_24.value)
-        informative_1h['safe_pump_36_50'] = self.safe_pump(informative_1h, 36, self.buy_pump_threshold_50_36.value, self.buy_pump_pull_threshold_50_36.value)
-        informative_1h['safe_pump_48_50'] = self.safe_pump(informative_1h, 48, self.buy_pump_threshold_50_48.value, self.buy_pump_pull_threshold_50_48.value)
+        informative_1h['safe_pump_24_50'] = self.safe_pump(informative_1h, 24, self.buy_pump_threshold_50_24, self.buy_pump_pull_threshold_50_24)
+        informative_1h['safe_pump_36_50'] = self.safe_pump(informative_1h, 36, self.buy_pump_threshold_50_36, self.buy_pump_pull_threshold_50_36)
+        informative_1h['safe_pump_48_50'] = self.safe_pump(informative_1h, 48, self.buy_pump_threshold_50_48, self.buy_pump_pull_threshold_50_48)
 
-        informative_1h['safe_pump_24_60'] = self.safe_pump(informative_1h, 24, self.buy_pump_threshold_60_24.value, self.buy_pump_pull_threshold_60_24.value)
-        informative_1h['safe_pump_36_60'] = self.safe_pump(informative_1h, 36, self.buy_pump_threshold_60_36.value, self.buy_pump_pull_threshold_60_36.value)
-        informative_1h['safe_pump_48_60'] = self.safe_pump(informative_1h, 48, self.buy_pump_threshold_60_48.value, self.buy_pump_pull_threshold_60_48.value)
+        informative_1h['safe_pump_24_60'] = self.safe_pump(informative_1h, 24, self.buy_pump_threshold_60_24, self.buy_pump_pull_threshold_60_24)
+        informative_1h['safe_pump_36_60'] = self.safe_pump(informative_1h, 36, self.buy_pump_threshold_60_36, self.buy_pump_pull_threshold_60_36)
+        informative_1h['safe_pump_48_60'] = self.safe_pump(informative_1h, 48, self.buy_pump_threshold_60_48, self.buy_pump_pull_threshold_60_48)
 
-        informative_1h['safe_pump_24_70'] = self.safe_pump(informative_1h, 24, self.buy_pump_threshold_70_24.value, self.buy_pump_pull_threshold_70_24.value)
-        informative_1h['safe_pump_36_70'] = self.safe_pump(informative_1h, 36, self.buy_pump_threshold_70_36.value, self.buy_pump_pull_threshold_70_36.value)
-        informative_1h['safe_pump_48_70'] = self.safe_pump(informative_1h, 48, self.buy_pump_threshold_70_48.value, self.buy_pump_pull_threshold_70_48.value)
+        informative_1h['safe_pump_24_70'] = self.safe_pump(informative_1h, 24, self.buy_pump_threshold_70_24, self.buy_pump_pull_threshold_70_24)
+        informative_1h['safe_pump_36_70'] = self.safe_pump(informative_1h, 36, self.buy_pump_threshold_70_36, self.buy_pump_pull_threshold_70_36)
+        informative_1h['safe_pump_48_70'] = self.safe_pump(informative_1h, 48, self.buy_pump_threshold_70_48, self.buy_pump_pull_threshold_70_48)
 
-        informative_1h['safe_pump_24_80'] = self.safe_pump(informative_1h, 24, self.buy_pump_threshold_80_24.value, self.buy_pump_pull_threshold_80_24.value)
-        informative_1h['safe_pump_36_80'] = self.safe_pump(informative_1h, 36, self.buy_pump_threshold_80_36.value, self.buy_pump_pull_threshold_80_36.value)
-        informative_1h['safe_pump_48_80'] = self.safe_pump(informative_1h, 48, self.buy_pump_threshold_80_48.value, self.buy_pump_pull_threshold_80_48.value)
+        informative_1h['safe_pump_24_80'] = self.safe_pump(informative_1h, 24, self.buy_pump_threshold_80_24, self.buy_pump_pull_threshold_80_24)
+        informative_1h['safe_pump_36_80'] = self.safe_pump(informative_1h, 36, self.buy_pump_threshold_80_36, self.buy_pump_pull_threshold_80_36)
+        informative_1h['safe_pump_48_80'] = self.safe_pump(informative_1h, 48, self.buy_pump_threshold_80_48, self.buy_pump_pull_threshold_80_48)
 
-        informative_1h['safe_pump_24_90'] = self.safe_pump(informative_1h, 24, self.buy_pump_threshold_90_24.value, self.buy_pump_pull_threshold_90_24.value)
-        informative_1h['safe_pump_36_90'] = self.safe_pump(informative_1h, 36, self.buy_pump_threshold_90_36.value, self.buy_pump_pull_threshold_90_36.value)
-        informative_1h['safe_pump_48_90'] = self.safe_pump(informative_1h, 48, self.buy_pump_threshold_90_48.value, self.buy_pump_pull_threshold_90_48.value)
+        informative_1h['safe_pump_24_90'] = self.safe_pump(informative_1h, 24, self.buy_pump_threshold_90_24, self.buy_pump_pull_threshold_90_24)
+        informative_1h['safe_pump_36_90'] = self.safe_pump(informative_1h, 36, self.buy_pump_threshold_90_36, self.buy_pump_pull_threshold_90_36)
+        informative_1h['safe_pump_48_90'] = self.safe_pump(informative_1h, 48, self.buy_pump_threshold_90_48, self.buy_pump_pull_threshold_90_48)
 
-        informative_1h['safe_pump_24_100'] = self.safe_pump(informative_1h, 24, self.buy_pump_threshold_100_24.value, self.buy_pump_pull_threshold_100_24.value)
-        informative_1h['safe_pump_36_100'] = self.safe_pump(informative_1h, 36, self.buy_pump_threshold_100_36.value, self.buy_pump_pull_threshold_100_36.value)
-        informative_1h['safe_pump_48_100'] = self.safe_pump(informative_1h, 48, self.buy_pump_threshold_100_48.value, self.buy_pump_pull_threshold_100_48.value)
+        informative_1h['safe_pump_24_100'] = self.safe_pump(informative_1h, 24, self.buy_pump_threshold_100_24, self.buy_pump_pull_threshold_100_24)
+        informative_1h['safe_pump_36_100'] = self.safe_pump(informative_1h, 36, self.buy_pump_threshold_100_36, self.buy_pump_pull_threshold_100_36)
+        informative_1h['safe_pump_48_100'] = self.safe_pump(informative_1h, 48, self.buy_pump_threshold_100_48, self.buy_pump_pull_threshold_100_48)
 
-        informative_1h['safe_pump_24_110'] = self.safe_pump(informative_1h, 24, self.buy_pump_threshold_110_24.value, self.buy_pump_pull_threshold_110_24.value)
-        informative_1h['safe_pump_36_110'] = self.safe_pump(informative_1h, 36, self.buy_pump_threshold_110_36.value, self.buy_pump_pull_threshold_110_36.value)
-        informative_1h['safe_pump_48_110'] = self.safe_pump(informative_1h, 48, self.buy_pump_threshold_110_48.value, self.buy_pump_pull_threshold_110_48.value)
+        informative_1h['safe_pump_24_110'] = self.safe_pump(informative_1h, 24, self.buy_pump_threshold_110_24, self.buy_pump_pull_threshold_110_24)
+        informative_1h['safe_pump_36_110'] = self.safe_pump(informative_1h, 36, self.buy_pump_threshold_110_36, self.buy_pump_pull_threshold_110_36)
+        informative_1h['safe_pump_48_110'] = self.safe_pump(informative_1h, 48, self.buy_pump_threshold_110_48, self.buy_pump_pull_threshold_110_48)
 
-        informative_1h['safe_pump_24_120'] = self.safe_pump(informative_1h, 24, self.buy_pump_threshold_120_24.value, self.buy_pump_pull_threshold_120_24.value)
-        informative_1h['safe_pump_36_120'] = self.safe_pump(informative_1h, 36, self.buy_pump_threshold_120_36.value, self.buy_pump_pull_threshold_120_36.value)
-        informative_1h['safe_pump_48_120'] = self.safe_pump(informative_1h, 48, self.buy_pump_threshold_120_48.value, self.buy_pump_pull_threshold_120_48.value)
+        informative_1h['safe_pump_24_120'] = self.safe_pump(informative_1h, 24, self.buy_pump_threshold_120_24, self.buy_pump_pull_threshold_120_24)
+        informative_1h['safe_pump_36_120'] = self.safe_pump(informative_1h, 36, self.buy_pump_threshold_120_36, self.buy_pump_pull_threshold_120_36)
+        informative_1h['safe_pump_48_120'] = self.safe_pump(informative_1h, 48, self.buy_pump_threshold_120_48, self.buy_pump_pull_threshold_120_48)
 
-        informative_1h['safe_dump_10'] = ((informative_1h['hl_pct_change_5'] < self.buy_dump_protection_10_5.value) | (informative_1h['close'] < informative_1h['low_5']) | (informative_1h['close'] > informative_1h['open']))
-        informative_1h['safe_dump_20'] = ((informative_1h['hl_pct_change_5'] < self.buy_dump_protection_20_5.value) | (informative_1h['close'] < informative_1h['low_5']) | (informative_1h['close'] > informative_1h['open']))
-        informative_1h['safe_dump_30'] = ((informative_1h['hl_pct_change_5'] < self.buy_dump_protection_30_5.value) | (informative_1h['close'] < informative_1h['low_5']) | (informative_1h['close'] > informative_1h['open']))
-        informative_1h['safe_dump_40'] = ((informative_1h['hl_pct_change_5'] < self.buy_dump_protection_40_5.value) | (informative_1h['close'] < informative_1h['low_5']) | (informative_1h['close'] > informative_1h['open']))
-        informative_1h['safe_dump_50'] = ((informative_1h['hl_pct_change_5'] < self.buy_dump_protection_50_5.value) | (informative_1h['close'] < informative_1h['low_5']) | (informative_1h['close'] > informative_1h['open']))
-        informative_1h['safe_dump_60'] = ((informative_1h['hl_pct_change_5'] < self.buy_dump_protection_60_5.value) | (informative_1h['close'] < informative_1h['low_5']) | (informative_1h['close'] > informative_1h['open']))
+        informative_1h['safe_dump_10'] = ((informative_1h['hl_pct_change_5'] < self.buy_dump_protection_10_5) | (informative_1h['close'] < informative_1h['low_5']) | (informative_1h['close'] > informative_1h['open']))
+        informative_1h['safe_dump_20'] = ((informative_1h['hl_pct_change_5'] < self.buy_dump_protection_20_5) | (informative_1h['close'] < informative_1h['low_5']) | (informative_1h['close'] > informative_1h['open']))
+        informative_1h['safe_dump_30'] = ((informative_1h['hl_pct_change_5'] < self.buy_dump_protection_30_5) | (informative_1h['close'] < informative_1h['low_5']) | (informative_1h['close'] > informative_1h['open']))
+        informative_1h['safe_dump_40'] = ((informative_1h['hl_pct_change_5'] < self.buy_dump_protection_40_5) | (informative_1h['close'] < informative_1h['low_5']) | (informative_1h['close'] > informative_1h['open']))
+        informative_1h['safe_dump_50'] = ((informative_1h['hl_pct_change_5'] < self.buy_dump_protection_50_5) | (informative_1h['close'] < informative_1h['low_5']) | (informative_1h['close'] > informative_1h['open']))
+        informative_1h['safe_dump_60'] = ((informative_1h['hl_pct_change_5'] < self.buy_dump_protection_60_5) | (informative_1h['close'] < informative_1h['low_5']) | (informative_1h['close'] > informative_1h['open']))
 
-        informative_1h['sell_pump_48_1'] = (informative_1h['hl_pct_change_48'] > self.sell_pump_threshold_48_1.value)
-        informative_1h['sell_pump_48_2'] = (informative_1h['hl_pct_change_48'] > self.sell_pump_threshold_48_2.value)
-        informative_1h['sell_pump_48_3'] = (informative_1h['hl_pct_change_48'] > self.sell_pump_threshold_48_3.value)
+        informative_1h['sell_pump_48_1'] = (informative_1h['hl_pct_change_48'] > self.sell_pump_threshold_48_1)
+        informative_1h['sell_pump_48_2'] = (informative_1h['hl_pct_change_48'] > self.sell_pump_threshold_48_2)
+        informative_1h['sell_pump_48_3'] = (informative_1h['hl_pct_change_48'] > self.sell_pump_threshold_48_3)
 
-        informative_1h['sell_pump_36_1'] = (informative_1h['hl_pct_change_36'] > self.sell_pump_threshold_36_1.value)
-        informative_1h['sell_pump_36_2'] = (informative_1h['hl_pct_change_36'] > self.sell_pump_threshold_36_2.value)
-        informative_1h['sell_pump_36_3'] = (informative_1h['hl_pct_change_36'] > self.sell_pump_threshold_36_3.value)
+        informative_1h['sell_pump_36_1'] = (informative_1h['hl_pct_change_36'] > self.sell_pump_threshold_36_1)
+        informative_1h['sell_pump_36_2'] = (informative_1h['hl_pct_change_36'] > self.sell_pump_threshold_36_2)
+        informative_1h['sell_pump_36_3'] = (informative_1h['hl_pct_change_36'] > self.sell_pump_threshold_36_3)
 
-        informative_1h['sell_pump_24_1'] = (informative_1h['hl_pct_change_24'] > self.sell_pump_threshold_24_1.value)
-        informative_1h['sell_pump_24_2'] = (informative_1h['hl_pct_change_24'] > self.sell_pump_threshold_24_2.value)
-        informative_1h['sell_pump_24_3'] = (informative_1h['hl_pct_change_24'] > self.sell_pump_threshold_24_3.value)
+        informative_1h['sell_pump_24_1'] = (informative_1h['hl_pct_change_24'] > self.sell_pump_threshold_24_1)
+        informative_1h['sell_pump_24_2'] = (informative_1h['hl_pct_change_24'] > self.sell_pump_threshold_24_2)
+        informative_1h['sell_pump_24_3'] = (informative_1h['hl_pct_change_24'] > self.sell_pump_threshold_24_3)
 
         return informative_1h
 
     def normal_tf_indicators(self, dataframe: DataFrame, metadata: dict) -> DataFrame:
         # BB 40 - STD2
         bb_40_std2 = qtpylib.bollinger_bands(dataframe['close'], window=40, stds=2)
-        dataframe['bb40_2_low']= bb_40_std2['lower']
+        dataframe['bb40_2_low'] = bb_40_std2['lower']
         dataframe['bb40_2_mid'] = bb_40_std2['mid']
         dataframe['bb40_2_delta'] = (bb_40_std2['mid'] - dataframe['bb40_2_low']).abs()
         dataframe['closedelta'] = (dataframe['close'] - dataframe['close'].shift()).abs()
@@ -3064,6 +3089,7 @@ class NostalgiaForInfinityNext(IStrategy):
         dataframe['ema_12'] = ta.EMA(dataframe, timeperiod=12)
         dataframe['ema_13'] = ta.EMA(dataframe, timeperiod=13)
         dataframe['ema_15'] = ta.EMA(dataframe, timeperiod=15)
+        dataframe['ema_16'] = ta.EMA(dataframe, timeperiod=16)
         dataframe['ema_20'] = ta.EMA(dataframe, timeperiod=20)
         dataframe['ema_25'] = ta.EMA(dataframe, timeperiod=25)
         dataframe['ema_26'] = ta.EMA(dataframe, timeperiod=26)
@@ -3092,8 +3118,8 @@ class NostalgiaForInfinityNext(IStrategy):
         dataframe['ewo'] = ewo(dataframe, 50, 200)
 
         # RSI
-        dataframe['rsi'] = ta.RSI(dataframe, timeperiod=14)
         dataframe['rsi_4'] = ta.RSI(dataframe, timeperiod=4)
+        dataframe['rsi_14'] = ta.RSI(dataframe, timeperiod=14)
         dataframe['rsi_20'] = ta.RSI(dataframe, timeperiod=20)
 
         # Chopiness
@@ -3115,15 +3141,13 @@ class NostalgiaForInfinityNext(IStrategy):
         dataframe['moderi_64'] = moderi(dataframe, 64)
         dataframe['moderi_96'] = moderi(dataframe, 96)
 
-        # TSI
-        dataframe['tsi_slow'] = tsi(dataframe, window_slow=20, window_fast=5)
-        dataframe['tsi_ema_slow'] = ta.EMA(dataframe['tsi_slow'], timeperiod=5)
-
-        dataframe['tsi_fast'] = tsi(dataframe, window_slow=4, window_fast=2)
-        dataframe['tsi_ema_fast'] = ta.EMA(dataframe['tsi_fast'], timeperiod=2)
-
         # hull
         dataframe['hull_75'] = hull(dataframe, 75)
+
+        # CRSI (3, 2, 100)
+        crsi_closechange = dataframe['close'] / dataframe['close'].shift(1)
+        crsi_updown = np.where(crsi_closechange.gt(1), 1.0, np.where(crsi_closechange.lt(1), -1.0, 0.0))
+        dataframe['crsi'] =  (ta.RSI(dataframe['close'], timeperiod=3) + ta.RSI(crsi_updown, timeperiod=2) + ta.ROC(dataframe['close'], 100)) / 3
 
         # zlema
         dataframe['zlema_68'] = zlema(dataframe, 68)
@@ -3134,43 +3158,86 @@ class NostalgiaForInfinityNext(IStrategy):
         # For sell checks
         dataframe['crossed_below_ema_12_26'] = qtpylib.crossed_below(dataframe['ema_12'], dataframe['ema_26'])
 
+        # Heiken Ashi
+        heikinashi = qtpylib.heikinashi(dataframe)
+        heikinashi["volume"] = dataframe["volume"]
+
+        # Profit Maximizer - PMAX
+        dataframe['pm'], dataframe['pmx'] = pmax(heikinashi, MAtype=1, length=9, multiplier=27, period=10, src=3)
+        dataframe['source'] = (dataframe['high'] + dataframe['low'] + dataframe['open'] + dataframe['close'])/4
+        dataframe['pmax_thresh'] = ta.EMA(dataframe['source'], timeperiod=9)
+
+        dataframe['sma_21'] = ta.SMA(dataframe, timeperiod=21)
+        dataframe['sma_68'] = ta.SMA(dataframe, timeperiod=68)
+        dataframe['sma_75'] = ta.SMA(dataframe, timeperiod=75)
+
+        # HLC3
+        dataframe['hlc3'] = (dataframe['high'] + dataframe['low'] + dataframe['close']) / 3
+
+        # HRSI
+        dataframe['hull'] = (2 * dataframe['hlc3'] - ta.WMA(dataframe['hlc3'], 2))
+        dataframe['hrsi'] = ta.RSI(dataframe['hull'], 2)
+
+        # ZLEMA
+        dataframe['zlema_2'] = pta.zlma(dataframe['hlc3'], length = 2)
+        dataframe['zlema_4'] = pta.zlma(dataframe['hlc3'], length = 4)
+
+        # CCI
+        dataframe['cci'] = ta.CCI(dataframe, source='hlc3', timeperiod=20)
+
+        # ATR
+        dataframe['atr'] = ta.ATR(dataframe, timeperiod=14)
+        dataframe['atr_high_thresh_1'] = (dataframe['high'] - (dataframe['atr'] * 5.4))
+        dataframe['atr_high_thresh_2'] = (dataframe['high'] - (dataframe['atr'] * 5.2))
+        dataframe['atr_high_thresh_3'] = (dataframe['high'] - (dataframe['atr'] * 5.0))
+        dataframe['atr_high_thresh_4'] = (dataframe['high'] - (dataframe['atr'] * 2.0))
+        dataframe['atr_high_thresh_q'] = (dataframe['high'] - (dataframe['atr'] * 3.0))
+
         # Dip protection
         dataframe['tpct_change_0']   = self.top_percent_change(dataframe,0)
         dataframe['tpct_change_2']   = self.top_percent_change(dataframe,2)
         dataframe['tpct_change_12']  = self.top_percent_change(dataframe,12)
         dataframe['tpct_change_144'] = self.top_percent_change(dataframe,144)
 
-        dataframe['safe_dips_10']  = self.safe_dips(dataframe, self.buy_dip_threshold_10_1.value, self.buy_dip_threshold_10_2.value, self.buy_dip_threshold_10_3.value, self.buy_dip_threshold_10_4.value)
-        dataframe['safe_dips_20']  = self.safe_dips(dataframe, self.buy_dip_threshold_20_1.value, self.buy_dip_threshold_20_2.value, self.buy_dip_threshold_20_3.value, self.buy_dip_threshold_20_4.value)
-        dataframe['safe_dips_30']  = self.safe_dips(dataframe, self.buy_dip_threshold_30_1.value, self.buy_dip_threshold_30_2.value, self.buy_dip_threshold_30_3.value, self.buy_dip_threshold_30_4.value)
-        dataframe['safe_dips_40']  = self.safe_dips(dataframe, self.buy_dip_threshold_40_1.value, self.buy_dip_threshold_40_2.value, self.buy_dip_threshold_40_3.value, self.buy_dip_threshold_40_4.value)
-        dataframe['safe_dips_50']  = self.safe_dips(dataframe, self.buy_dip_threshold_50_1.value, self.buy_dip_threshold_50_2.value, self.buy_dip_threshold_50_3.value, self.buy_dip_threshold_50_4.value)
-        dataframe['safe_dips_60']  = self.safe_dips(dataframe, self.buy_dip_threshold_60_1.value, self.buy_dip_threshold_60_2.value, self.buy_dip_threshold_60_3.value, self.buy_dip_threshold_60_4.value)
-        dataframe['safe_dips_70']  = self.safe_dips(dataframe, self.buy_dip_threshold_70_1.value, self.buy_dip_threshold_70_2.value, self.buy_dip_threshold_70_3.value, self.buy_dip_threshold_70_4.value)
-        dataframe['safe_dips_80']  = self.safe_dips(dataframe, self.buy_dip_threshold_80_1.value, self.buy_dip_threshold_80_2.value, self.buy_dip_threshold_80_3.value, self.buy_dip_threshold_80_4.value)
-        dataframe['safe_dips_90']  = self.safe_dips(dataframe, self.buy_dip_threshold_90_1.value, self.buy_dip_threshold_90_2.value, self.buy_dip_threshold_90_3.value, self.buy_dip_threshold_90_4.value)
-        dataframe['safe_dips_100'] = self.safe_dips(dataframe, self.buy_dip_threshold_100_1.value, self.buy_dip_threshold_100_2.value, self.buy_dip_threshold_100_3.value, self.buy_dip_threshold_100_4.value)
-        dataframe['safe_dips_110'] = self.safe_dips(dataframe, self.buy_dip_threshold_110_1.value, self.buy_dip_threshold_110_2.value, self.buy_dip_threshold_110_3.value, self.buy_dip_threshold_110_4.value)
-        dataframe['safe_dips_120'] = self.safe_dips(dataframe, self.buy_dip_threshold_120_1.value, self.buy_dip_threshold_120_2.value, self.buy_dip_threshold_120_3.value, self.buy_dip_threshold_120_4.value)
-        dataframe['safe_dips_130'] = self.safe_dips(dataframe, self.buy_dip_threshold_130_1.value, self.buy_dip_threshold_130_2.value, self.buy_dip_threshold_130_3.value, self.buy_dip_threshold_130_4.value)
+        dataframe['safe_dips_10']  = self.safe_dips(dataframe, self.buy_dip_threshold_10_1, self.buy_dip_threshold_10_2, self.buy_dip_threshold_10_3, self.buy_dip_threshold_10_4)
+        dataframe['safe_dips_20']  = self.safe_dips(dataframe, self.buy_dip_threshold_20_1, self.buy_dip_threshold_20_2, self.buy_dip_threshold_20_3, self.buy_dip_threshold_20_4)
+        dataframe['safe_dips_30']  = self.safe_dips(dataframe, self.buy_dip_threshold_30_1, self.buy_dip_threshold_30_2, self.buy_dip_threshold_30_3, self.buy_dip_threshold_30_4)
+        dataframe['safe_dips_40']  = self.safe_dips(dataframe, self.buy_dip_threshold_40_1, self.buy_dip_threshold_40_2, self.buy_dip_threshold_40_3, self.buy_dip_threshold_40_4)
+        dataframe['safe_dips_50']  = self.safe_dips(dataframe, self.buy_dip_threshold_50_1, self.buy_dip_threshold_50_2, self.buy_dip_threshold_50_3, self.buy_dip_threshold_50_4)
+        dataframe['safe_dips_60']  = self.safe_dips(dataframe, self.buy_dip_threshold_60_1, self.buy_dip_threshold_60_2, self.buy_dip_threshold_60_3, self.buy_dip_threshold_60_4)
+        dataframe['safe_dips_70']  = self.safe_dips(dataframe, self.buy_dip_threshold_70_1, self.buy_dip_threshold_70_2, self.buy_dip_threshold_70_3, self.buy_dip_threshold_70_4)
+        dataframe['safe_dips_80']  = self.safe_dips(dataframe, self.buy_dip_threshold_80_1, self.buy_dip_threshold_80_2, self.buy_dip_threshold_80_3, self.buy_dip_threshold_80_4)
+        dataframe['safe_dips_90']  = self.safe_dips(dataframe, self.buy_dip_threshold_90_1, self.buy_dip_threshold_90_2, self.buy_dip_threshold_90_3, self.buy_dip_threshold_90_4)
+        dataframe['safe_dips_100'] = self.safe_dips(dataframe, self.buy_dip_threshold_100_1, self.buy_dip_threshold_100_2, self.buy_dip_threshold_100_3, self.buy_dip_threshold_100_4)
+        dataframe['safe_dips_110'] = self.safe_dips(dataframe, self.buy_dip_threshold_110_1, self.buy_dip_threshold_110_2, self.buy_dip_threshold_110_3, self.buy_dip_threshold_110_4)
+        dataframe['safe_dips_120'] = self.safe_dips(dataframe, self.buy_dip_threshold_120_1, self.buy_dip_threshold_120_2, self.buy_dip_threshold_120_3, self.buy_dip_threshold_120_4)
+        dataframe['safe_dips_130'] = self.safe_dips(dataframe, self.buy_dip_threshold_130_1, self.buy_dip_threshold_130_2, self.buy_dip_threshold_130_3, self.buy_dip_threshold_130_4)
 
         # Volume
         dataframe['volume_mean_4'] = dataframe['volume'].rolling(4).mean().shift(1)
         dataframe['volume_mean_30'] = dataframe['volume'].rolling(30).mean()
+
+        if not self.config['runmode'].value in ('live', 'dry_run'):
+            # Backtest age filter
+            dataframe['bt_agefilter_ok'] = False
+            dataframe.loc[dataframe.index > (12 * 24 * self.bt_min_age_days),'bt_agefilter_ok'] = True
+        else:
+            # Exchange downtime protection
+            dataframe['live_data_ok'] = (dataframe['volume'].rolling(window=72, min_periods=72).min() > 0)
 
         return dataframe
 
     def resampled_tf_indicators(self, dataframe: DataFrame, metadata: dict) -> DataFrame:
         # Indicators
         # -----------------------------------------------------------------------------------------
-        dataframe['rsi'] = ta.RSI(dataframe, timeperiod=14)
+        dataframe['rsi_14'] = ta.RSI(dataframe, timeperiod=14)
 
         return dataframe
 
     def base_tf_btc_indicators(self, dataframe: DataFrame, metadata: dict) -> DataFrame:
         # Indicators
         # -----------------------------------------------------------------------------------------
-        dataframe['rsi'] = ta.RSI(dataframe, timeperiod=14)
+        dataframe['rsi_14'] = ta.RSI(dataframe, timeperiod=14)
 
         # Add prefix
         # -----------------------------------------------------------------------------------------
@@ -3182,8 +3249,8 @@ class NostalgiaForInfinityNext(IStrategy):
     def info_tf_btc_indicators(self, dataframe: DataFrame, metadata: dict) -> DataFrame:
         # Indicators
         # -----------------------------------------------------------------------------------------
-        dataframe['rsi'] = ta.RSI(dataframe, timeperiod=14)
-        dataframe['not_downtrend'] = ((dataframe['close'] > dataframe['close'].shift(2)) | (dataframe['rsi'] > 50))
+        dataframe['rsi_14'] = ta.RSI(dataframe, timeperiod=14)
+        dataframe['not_downtrend'] = ((dataframe['close'] > dataframe['close'].shift(2)) | (dataframe['rsi_14'] > 50))
 
         # Add prefix
         # -----------------------------------------------------------------------------------------
@@ -3193,19 +3260,20 @@ class NostalgiaForInfinityNext(IStrategy):
         return dataframe
 
     def populate_indicators(self, dataframe: DataFrame, metadata: dict) -> DataFrame:
+        tik = time.perf_counter()
         '''
         --> BTC informative (5m/1h)
         ___________________________________________________________________________________________
         '''
         if self.has_BTC_base_tf:
-            btc_base_tf = self.dp.get_pair_dataframe("BTC/USDT", self.timeframe)
+            btc_base_tf = self.dp.get_pair_dataframe(f"BTC/{self.config['stake_currency']}", self.timeframe)
             btc_base_tf = self.base_tf_btc_indicators(btc_base_tf, metadata)
             dataframe = merge_informative_pair(dataframe, btc_base_tf, self.timeframe, self.timeframe, ffill=True)
             drop_columns = [(s + "_" + self.timeframe) for s in ['date', 'open', 'high', 'low', 'close', 'volume']]
             dataframe.drop(columns=dataframe.columns.intersection(drop_columns), inplace=True)
 
         if self.has_BTC_info_tf:
-            btc_info_tf = self.dp.get_pair_dataframe("BTC/USDT", self.info_timeframe)
+            btc_info_tf = self.dp.get_pair_dataframe(f"BTC/{self.config['stake_currency']}", self.info_timeframe)
             btc_info_tf = self.info_tf_btc_indicators(btc_info_tf, metadata)
             dataframe = merge_informative_pair(dataframe, btc_info_tf, self.timeframe, self.info_timeframe, ffill=True)
             drop_columns = [(s + "_" + self.info_timeframe) for s in ['date', 'open', 'high', 'low', 'close', 'volume']]
@@ -3240,729 +3308,589 @@ class NostalgiaForInfinityNext(IStrategy):
         ___________________________________________________________________________________________
         '''
         dataframe = self.normal_tf_indicators(dataframe, metadata)
-        return dataframe
 
+        tok = time.perf_counter()
+        if self.has_loop_perf_logging:
+            log.info(f"Populate indicators for pair: {metadata['pair']} took {tok - tik:0.4f} seconds.")
+
+        return dataframe
 
     def populate_buy_trend(self, dataframe: DataFrame, metadata: dict) -> DataFrame:
         conditions = []
-        buy_protection_list = []
+        dataframe.loc[:, 'buy_tag'] = ''
 
-        if self.config['runmode'].value in ('live', 'dry_run'):
-            not_empty_volume = dataframe['volume'].rolling(window=72, min_periods=72).count().notna()
-        else:
-            not_empty_volume = dataframe['volume'].rolling(window=self.startup_candle_count, min_periods=self.startup_candle_count).count().notna()
-
-        # Protections [STANDARD] - Common to every condition
         for index in self.buy_protection_params:
             item_buy_protection_list = [True]
             global_buy_protection_params = self.buy_protection_params[index]
-            if global_buy_protection_params["ema_fast"].value:
-                item_buy_protection_list.append(dataframe[f"ema_{global_buy_protection_params['ema_fast_len'].value}"] > dataframe['ema_200'])
-            if global_buy_protection_params["ema_slow"].value:
-                item_buy_protection_list.append(dataframe[f"ema_{global_buy_protection_params['ema_slow_len'].value}_1h"] > dataframe['ema_200_1h'])
-            if global_buy_protection_params["close_above_ema_fast"].value:
-                item_buy_protection_list.append(dataframe['close'] > dataframe[f"ema_{global_buy_protection_params['close_above_ema_fast_len'].value}"])
-            if global_buy_protection_params["close_above_ema_slow"].value:
-                item_buy_protection_list.append(dataframe['close'] > dataframe[f"ema_{global_buy_protection_params['close_above_ema_slow_len'].value}_1h"])
-            if global_buy_protection_params["sma200_rising"].value:
-                item_buy_protection_list.append(dataframe['sma_200'] > dataframe['sma_200'].shift(int(global_buy_protection_params['sma200_rising_val'].value)))
-            if global_buy_protection_params["sma200_1h_rising"].value:
-                item_buy_protection_list.append(dataframe['sma_200_1h'] > dataframe['sma_200_1h'].shift(int(global_buy_protection_params['sma200_1h_rising_val'].value)))
-            if global_buy_protection_params["safe_dips"].value:
-                item_buy_protection_list.append(dataframe[f"safe_dips_{global_buy_protection_params['safe_dips_type'].value}"])
-            if global_buy_protection_params["safe_pump"].value:
-                item_buy_protection_list.append(dataframe[f"safe_pump_{global_buy_protection_params['safe_pump_period'].value}_{global_buy_protection_params['safe_pump_type'].value}_1h"])
-            if global_buy_protection_params['btc_1h_not_downtrend'].value:
-                item_buy_protection_list.append(dataframe['btc_not_downtrend_1h'])
-            item_buy_protection_list.append(not_empty_volume)
-            buy_protection_list.append(item_buy_protection_list)
-
-        # Buy Condition #1
-        dataframe.loc[:,'buy_condition_1'] = False
-        # -----------------------------------------------------------------------------------------
-        if self.buy_params['buy_condition_1_enable']:
-            # Non-Standard protections (add below)
-
-            # Logic
-            item_buy_logic = []
-            item_buy_logic.append(reduce(lambda x, y: x & y, buy_protection_list[0]))
-            item_buy_logic.append(((dataframe['close'] - dataframe['open'].rolling(36).min()) / dataframe['open'].rolling(36).min()) > self.buy_min_inc_1.value)
-            item_buy_logic.append(((dataframe['close'] - dataframe['open'].rolling(36).min()) / dataframe['open'].rolling(36).min()) > self.buy_min_inc_1.value)
-            item_buy_logic.append(dataframe['rsi_1h'] > self.buy_rsi_1h_min_1.value)
-            item_buy_logic.append(dataframe['rsi_1h'] < self.buy_rsi_1h_max_1.value)
-            item_buy_logic.append(dataframe['rsi'] < self.buy_rsi_1.value)
-            item_buy_logic.append(dataframe['mfi'] < self.buy_mfi_1.value)
-            item_buy_logic.append(dataframe['cti'] < self.buy_cti_1.value)
-            item_buy_logic.append(dataframe['volume'] > 0)
-            item_buy = reduce(lambda x, y: x & y, item_buy_logic)
-            conditions.append(item_buy)
-
-            dataframe.loc[item_buy,'buy_condition_1'] = True
-
-        # Buy Condition #2
-        dataframe.loc[:,'buy_condition_2'] = False
-        # -----------------------------------------------------------------------------------------
-        if self.buy_params['buy_condition_2_enable']:
-            # Non-Standard protections (add below)
-
-            # Logic
-            item_buy_logic = []
-            item_buy_logic.append(reduce(lambda x, y: x & y, buy_protection_list[1]))
-            item_buy_logic.append(dataframe['rsi'] < dataframe['rsi_1h'] - self.buy_rsi_1h_diff_2.value)
-            item_buy_logic.append(dataframe['mfi'] < self.buy_mfi_2.value)
-            item_buy_logic.append(dataframe['close'] < (dataframe['bb20_2_low'] * self.buy_bb_offset_2.value))
-            item_buy_logic.append(dataframe['volume'] < (dataframe['volume_mean_4'] * self.buy_volume_2.value))
-            item_buy_logic.append(dataframe['volume'] > 0)
-            item_buy = reduce(lambda x, y: x & y, item_buy_logic)
-            conditions.append(item_buy)
-
-            dataframe.loc[item_buy,'buy_condition_2'] = True
-
-        # Buy Condition #3
-        dataframe.loc[:,'buy_condition_3'] = False
-        # -----------------------------------------------------------------------------------------
-        if self.buy_params['buy_condition_3_enable']:
-            # Non-Standard protections (add below)
-            buy_protection_list[2].append(dataframe['close'] > (dataframe['ema_200_1h'] * self.buy_ema_rel_3.value))
-
-            # Logic
-            item_buy_logic = []
-            item_buy_logic.append(reduce(lambda x, y: x & y, buy_protection_list[2]))
-            item_buy_logic.append(dataframe['bb40_2_low'].shift().gt(0))
-            item_buy_logic.append(dataframe['bb40_2_delta'].gt(dataframe['close'] * self.buy_bb40_bbdelta_close_3.value))
-            item_buy_logic.append(dataframe['closedelta'].gt(dataframe['close'] * self.buy_bb40_closedelta_close_3.value))
-            item_buy_logic.append(dataframe['tail'].lt(dataframe['bb40_2_delta'] * self.buy_bb40_tail_bbdelta_3.value))
-            item_buy_logic.append(dataframe['close'].lt(dataframe['bb40_2_low'].shift()))
-            item_buy_logic.append(dataframe['close'].le(dataframe['close'].shift()))
-            item_buy_logic.append(dataframe['cti'] < self.buy_cti_3.value)
-            item_buy_logic.append(dataframe['volume'] > 0)
-            item_buy = reduce(lambda x, y: x & y, item_buy_logic)
-            conditions.append(item_buy)
-
-            dataframe.loc[item_buy,'buy_condition_3'] = True
-
-        # Buy Condition #4
-        dataframe.loc[:,'buy_condition_4'] = False
-        # -----------------------------------------------------------------------------------------
-        if self.buy_params['buy_condition_4_enable']:
-            # Non-Standard protections (add below)
-
-            # Logic
-            item_buy_logic = []
-            item_buy_logic.append(reduce(lambda x, y: x & y, buy_protection_list[3]))
-            item_buy_logic.append(dataframe['close'] < dataframe['ema_50'])
-            item_buy_logic.append(dataframe['close'] < self.buy_bb20_close_bblowerband_4.value * dataframe['bb20_2_low'])
-            item_buy_logic.append(dataframe['volume'] < (dataframe['volume_mean_30'].shift(1) * self.buy_bb20_volume_4.value))
-            item_buy_logic.append(dataframe['volume'] > 0)
-            item_buy = reduce(lambda x, y: x & y, item_buy_logic)
-            conditions.append(item_buy)
-
-            dataframe.loc[item_buy,'buy_condition_4'] = True
-
-        # Buy Condition #5
-        dataframe.loc[:,'buy_condition_5'] = False
-        # -----------------------------------------------------------------------------------------
-        if self.buy_params['buy_condition_5_enable']:
-            # Non-Standard protections (add below)
-            buy_protection_list[4].append(dataframe['close'] > (dataframe['ema_200_1h'] * self.buy_ema_rel_5.value))
-
-            # Logic
-            item_buy_logic = []
-            item_buy_logic.append(reduce(lambda x, y: x & y, buy_protection_list[4]))
-            item_buy_logic.append(dataframe['ema_26'] > dataframe['ema_12'])
-            item_buy_logic.append((dataframe['ema_26'] - dataframe['ema_12']) > (dataframe['open'] * self.buy_ema_open_mult_5.value))
-            item_buy_logic.append((dataframe['ema_26'].shift() - dataframe['ema_12'].shift()) > (dataframe['open'] / 100))
-            item_buy_logic.append(dataframe['close'] < (dataframe['bb20_2_low'] * self.buy_bb_offset_5.value))
-            item_buy_logic.append(dataframe['cti'] < self.buy_cti_5.value)
-            item_buy_logic.append(dataframe['volume'] < (dataframe['volume_mean_4'] * self.buy_volume_5.value))
-            item_buy_logic.append(dataframe['volume'] > 0)
-            item_buy = reduce(lambda x, y: x & y, item_buy_logic)
-            conditions.append(item_buy)
-
-            dataframe.loc[item_buy,'buy_condition_5'] = True
-
-        # Buy Condition #6
-        dataframe.loc[:,'buy_condition_6'] = False
-        # -----------------------------------------------------------------------------------------
-        if self.buy_params['buy_condition_6_enable']:
-            # Non-Standard protections (add below)
-
-            # Logic
-            item_buy_logic = []
-            item_buy_logic.append(reduce(lambda x, y: x & y, buy_protection_list[5]))
-            item_buy_logic.append(dataframe['ema_26'] > dataframe['ema_12'])
-            item_buy_logic.append((dataframe['ema_26'] - dataframe['ema_12']) > (dataframe['open'] * self.buy_ema_open_mult_6.value))
-            item_buy_logic.append((dataframe['ema_26'].shift() - dataframe['ema_12'].shift()) > (dataframe['open'] / 100))
-            item_buy_logic.append(dataframe['close'] < (dataframe['bb20_2_low'] * self.buy_bb_offset_6.value))
-            item_buy_logic.append(dataframe['volume'] > 0)
-            item_buy = reduce(lambda x, y: x & y, item_buy_logic)
-            conditions.append(item_buy)
-
-            dataframe.loc[item_buy,'buy_condition_6'] = True
-
-        # Buy Condition #7
-        dataframe.loc[:,'buy_condition_7'] = False
-        # -----------------------------------------------------------------------------------------
-        if self.buy_params['buy_condition_7_enable']:
-            # Non-Standard protections (add below)
-
-            # Logic
-            item_buy_logic = []
-            item_buy_logic.append(reduce(lambda x, y: x & y, buy_protection_list[6]))
-            item_buy_logic.append(dataframe['ema_26'] > dataframe['ema_12'])
-            item_buy_logic.append((dataframe['ema_26'] - dataframe['ema_12']) > (dataframe['open'] * self.buy_ema_open_mult_7.value))
-            item_buy_logic.append((dataframe['ema_26'].shift() - dataframe['ema_12'].shift()) > (dataframe['open'] / 100))
-            item_buy_logic.append(dataframe['cti'] < self.buy_cti_7.value)
-            item_buy_logic.append(dataframe['volume'] > 0)
-            item_buy = reduce(lambda x, y: x & y, item_buy_logic)
-            conditions.append(item_buy)
-
-            dataframe.loc[item_buy,'buy_condition_7'] = True
-
-        # Buy Condition #8
-        dataframe.loc[:,'buy_condition_8'] = False
-        # -----------------------------------------------------------------------------------------
-        if self.buy_params['buy_condition_8_enable']:
-            # Non-Standard protections (add below)
-
-            # Logic
-            item_buy_logic = []
-            item_buy_logic.append(reduce(lambda x, y: x & y, buy_protection_list[7]))
-            item_buy_logic.append(dataframe['moderi_96'])
-            item_buy_logic.append(dataframe['cti'] < self.buy_cti_8.value)
-            item_buy_logic.append(dataframe['close'] < (dataframe['bb20_2_low'] * self.buy_bb_offset_8.value))
-            item_buy_logic.append(dataframe['rsi_1h'] < self.buy_rsi_1h_8.value)
-            item_buy_logic.append(dataframe['volume'] < (dataframe['volume_mean_4'] * self.buy_volume_8.value))
-            item_buy_logic.append(dataframe['volume'] > 0)
-            item_buy = reduce(lambda x, y: x & y, item_buy_logic)
-            conditions.append(item_buy)
-
-            dataframe.loc[item_buy,'buy_condition_8'] = True
-
-        # Buy Condition #9
-        dataframe.loc[:,'buy_condition_9'] = False
-        # -----------------------------------------------------------------------------------------
-        if self.buy_params['buy_condition_9_enable']:
-            # Non-Standard protections (add below)
-            buy_protection_list[8].append(dataframe['ema_50'] > dataframe['ema_200'])
-
-            # Logic
-            item_buy_logic = []
-            item_buy_logic.append(reduce(lambda x, y: x & y, buy_protection_list[8]))
-            item_buy_logic.append(dataframe['close'] < dataframe['ema_20'] * self.buy_ma_offset_9.value)
-            item_buy_logic.append(dataframe['close'] < dataframe['bb20_2_low'] * self.buy_bb_offset_9.value)
-            item_buy_logic.append(dataframe['rsi_1h'] > self.buy_rsi_1h_min_9.value)
-            item_buy_logic.append(dataframe['rsi_1h'] < self.buy_rsi_1h_max_9.value)
-            item_buy_logic.append(dataframe['mfi'] < self.buy_mfi_9.value)
-            item_buy_logic.append(dataframe['volume'] > 0)
-            item_buy = reduce(lambda x, y: x & y, item_buy_logic)
-            conditions.append(item_buy)
-
-            dataframe.loc[item_buy,'buy_condition_9'] = True
-
-        # Buy Condition #10
-        dataframe.loc[:,'buy_condition_10'] = False
-        # -----------------------------------------------------------------------------------------
-        if self.buy_params['buy_condition_10_enable']:
-            # Non-Standard protections (add below)
-            buy_protection_list[9].append(dataframe['ema_50_1h'] > dataframe['ema_100_1h'])
-
-            # Logic
-            item_buy_logic = []
-            item_buy_logic.append(reduce(lambda x, y: x & y, buy_protection_list[9]))
-            item_buy_logic.append(dataframe['close'] < dataframe['sma_30'] * self.buy_ma_offset_10.value)
-            item_buy_logic.append(dataframe['close'] < dataframe['bb20_2_low'] * self.buy_bb_offset_10.value)
-            item_buy_logic.append(dataframe['rsi_1h'] < self.buy_rsi_1h_10.value)
-            item_buy_logic.append(dataframe['volume'] > 0)
-            item_buy = reduce(lambda x, y: x & y, item_buy_logic)
-            conditions.append(item_buy)
-
-            dataframe.loc[item_buy,'buy_condition_10'] = True
-
-        # Buy Condition #11
-        dataframe.loc[:,'buy_condition_11'] = False
-        # -----------------------------------------------------------------------------------------
-        if self.buy_params['buy_condition_11_enable']:
-            # Non-Standard protections (add below)
-            buy_protection_list[10].append(dataframe['ema_50_1h'] > dataframe['ema_100_1h'])
-
-            # Logic
-            item_buy_logic = []
-            item_buy_logic.append(reduce(lambda x, y: x & y, buy_protection_list[10]))
-            item_buy_logic.append(((dataframe['close'] - dataframe['open'].rolling(36).min()) / dataframe['open'].rolling(36).min()) > self.buy_min_inc_11.value)
-            item_buy_logic.append(dataframe['close'] < dataframe['sma_30'] * self.buy_ma_offset_11.value)
-            item_buy_logic.append(dataframe['rsi_1h'] > self.buy_rsi_1h_min_11.value)
-            item_buy_logic.append(dataframe['rsi_1h'] < self.buy_rsi_1h_max_11.value)
-            item_buy_logic.append(dataframe['rsi'] < self.buy_rsi_11.value)
-            item_buy_logic.append(dataframe['mfi'] < self.buy_mfi_11.value)
-            item_buy_logic.append(dataframe['volume'] > 0)
-            item_buy = reduce(lambda x, y: x & y, item_buy_logic)
-            conditions.append(item_buy)
-
-            dataframe.loc[item_buy,'buy_condition_11'] = True
-
-        # Buy Condition #12
-        dataframe.loc[:,'buy_condition_12'] = False
-        # -----------------------------------------------------------------------------------------
-        if self.buy_params['buy_condition_12_enable']:
-            # Non-Standard protections (add below)
-
-            # Logic
-            item_buy_logic = []
-            item_buy_logic.append(reduce(lambda x, y: x & y, buy_protection_list[11]))
-            item_buy_logic.append(dataframe['close'] < dataframe['sma_30'] * self.buy_ma_offset_12.value)
-            item_buy_logic.append(dataframe['ewo'] > self.buy_ewo_12.value)
-            item_buy_logic.append(dataframe['rsi'] < self.buy_rsi_12.value)
-            item_buy_logic.append(dataframe['volume'] > 0)
-            item_buy = reduce(lambda x, y: x & y, item_buy_logic)
-            conditions.append(item_buy)
-
-            dataframe.loc[item_buy,'buy_condition_12'] = True
-
-        # Buy Condition #13
-        dataframe.loc[:,'buy_condition_13'] = False
-        # -----------------------------------------------------------------------------------------
-        if self.buy_params['buy_condition_13_enable']:
-            # Non-Standard protections (add below)
-            buy_protection_list[12].append(dataframe['ema_50_1h'] > dataframe['ema_100_1h'])
-
-            # Logic
-            item_buy_logic = []
-            item_buy_logic.append(reduce(lambda x, y: x & y, buy_protection_list[12]))
-            item_buy_logic.append(dataframe['close'] < dataframe['sma_30'] * self.buy_ma_offset_13.value)
-            item_buy_logic.append(dataframe['cti'] < self.buy_cti_13.value)
-            item_buy_logic.append(dataframe['ewo'] < self.buy_ewo_13.value)
-            item_buy_logic.append(dataframe['volume'] > 0)
-            item_buy = reduce(lambda x, y: x & y, item_buy_logic)
-            conditions.append(item_buy)
-
-            dataframe.loc[item_buy,'buy_condition_13'] = True
-
-        # Buy Condition #14
-        dataframe.loc[ :,'buy_condition_14'] = False
-        # -----------------------------------------------------------------------------------------
-        if self.buy_params['buy_condition_14_enable']:
-            # Non-Standard protections (add below)
-
-            # Logic
-            item_buy_logic = []
-            item_buy_logic.append(reduce(lambda x, y: x & y, buy_protection_list[13]))
-            item_buy_logic.append(dataframe['ema_26'] > dataframe['ema_12'])
-            item_buy_logic.append((dataframe['ema_26'] - dataframe['ema_12']) > (dataframe['open'] * self.buy_ema_open_mult_14.value))
-            item_buy_logic.append((dataframe['ema_26'].shift() - dataframe['ema_12'].shift()) > (dataframe['open'] / 100))
-            item_buy_logic.append(dataframe['close'] < (dataframe['bb20_2_low'] * self.buy_bb_offset_14.value))
-            item_buy_logic.append(dataframe['close'] < dataframe['ema_20'] * self.buy_ma_offset_14.value)
-            item_buy_logic.append(dataframe['cti'] < self.buy_cti_14.value)
-            item_buy_logic.append(dataframe['volume'] > 0)
-            item_buy = reduce(lambda x, y: x & y, item_buy_logic)
-            conditions.append(item_buy)
-
-            dataframe.loc[item_buy,'buy_condition_14'] = True
-
-        # Buy Condition #15
-        dataframe.loc[:,'buy_condition_15'] = False
-        # -----------------------------------------------------------------------------------------
-        if self.buy_params['buy_condition_15_enable']:
-            # Non-Standard protections (add below)
-            buy_protection_list[14].append(dataframe['close'] > dataframe['ema_200_1h'] * self.buy_ema_rel_15.value)
-
-            # Logic
-            item_buy_logic = []
-            item_buy_logic.append(reduce(lambda x, y: x & y, buy_protection_list[14]))
-            item_buy_logic.append(dataframe['ema_26'] > dataframe['ema_12'])
-            item_buy_logic.append((dataframe['ema_26'] - dataframe['ema_12']) > (dataframe['open'] * self.buy_ema_open_mult_15.value))
-            item_buy_logic.append((dataframe['ema_26'].shift() - dataframe['ema_12'].shift()) > (dataframe['open'] / 100))
-            item_buy_logic.append(dataframe['rsi'] < self.buy_rsi_15.value)
-            item_buy_logic.append(dataframe['close'] < dataframe['ema_20'] * self.buy_ma_offset_15.value)
-            item_buy_logic.append(dataframe['volume'] > 0)
-            item_buy = reduce(lambda x, y: x & y, item_buy_logic)
-            conditions.append(item_buy)
-
-            dataframe.loc[item_buy,'buy_condition_15'] = True
-
-        # Buy Condition #16
-        dataframe.loc[:,'buy_condition_16'] = False
-        # -----------------------------------------------------------------------------------------
-        if self.buy_params['buy_condition_16_enable']:
-            # Non-Standard protections (add below)
-
-            # Logic
-            item_buy_logic = []
-            item_buy_logic.append(reduce(lambda x, y: x & y, buy_protection_list[15]))
-            item_buy_logic.append(dataframe['close'] < dataframe['ema_20'] * self.buy_ma_offset_16.value)
-            item_buy_logic.append(dataframe['ewo'] > self.buy_ewo_16.value)
-            item_buy_logic.append(dataframe['rsi'] < self.buy_rsi_16.value)
-            item_buy_logic.append(dataframe['cti'] < self.buy_cti_16.value)
-            item_buy_logic.append(dataframe['volume'] > 0)
-            item_buy = reduce(lambda x, y: x & y, item_buy_logic)
-            conditions.append(item_buy)
-
-            dataframe.loc[item_buy,'buy_condition_16'] = True
-
-        # Buy Condition #17
-        dataframe.loc[:,'buy_condition_17'] = False
-        # -----------------------------------------------------------------------------------------
-        if self.buy_params['buy_condition_17_enable']:
-            # Non-Standard protections (add below)
-
-            # Logic
-            item_buy_logic = []
-            item_buy_logic.append(reduce(lambda x, y: x & y, buy_protection_list[16]))
-            item_buy_logic.append(dataframe['close'] < dataframe['ema_20'] * self.buy_ma_offset_17.value)
-            item_buy_logic.append(dataframe['ewo'] < self.buy_ewo_17.value)
-            item_buy_logic.append(dataframe['cti'] < self.buy_cti_17.value)
-            item_buy_logic.append(dataframe['volume'] < (dataframe['volume_mean_4'] * self.buy_volume_17.value))
-            item_buy_logic.append(dataframe['volume'] > 0)
-            item_buy = reduce(lambda x, y: x & y, item_buy_logic)
-            conditions.append(item_buy)
-
-            dataframe.loc[item_buy,'buy_condition_17'] = True
-
-        # Buy Condition #18
-        dataframe.loc[:,'buy_condition_18'] = False
-        # -----------------------------------------------------------------------------------------
-        if self.buy_params['buy_condition_18_enable']:
-            # Non-Standard protections (add below)
-            # buy_18_protections.append(dataframe['ema_100'] > dataframe['ema_200'])
-            buy_protection_list[17].append(dataframe['sma_200'] > dataframe['sma_200'].shift(20))
-            buy_protection_list[17].append(dataframe['sma_200_1h'] > dataframe['sma_200_1h'].shift(36))
-
-            # Logic
-            item_buy_logic = []
-            item_buy_logic.append(reduce(lambda x, y: x & y, buy_protection_list[17]))
-            item_buy_logic.append(dataframe['rsi'] < self.buy_rsi_18.value)
-            item_buy_logic.append(dataframe['close'] < (dataframe['bb20_2_low'] * self.buy_bb_offset_18.value))
-            item_buy_logic.append(dataframe['volume'] < (dataframe['volume_mean_4'] * self.buy_volume_18.value))
-            item_buy_logic.append(dataframe['volume'] > 0)
-            item_buy = reduce(lambda x, y: x & y, item_buy_logic)
-            conditions.append(item_buy)
-
-            dataframe.loc[item_buy,'buy_condition_18'] = True
-
-        # Buy Condition #19
-        dataframe.loc[:,'buy_condition_19'] = False
-        # -----------------------------------------------------------------------------------------
-        if self.buy_params['buy_condition_19_enable']:
-            # Non-Standard protections (add below)
-
-            # Logic
-            item_buy_logic = []
-            item_buy_logic.append(reduce(lambda x, y: x & y, buy_protection_list[18]))
-            item_buy_logic.append(dataframe['close'].shift(1) > dataframe['ema_100_1h'])
-            item_buy_logic.append(dataframe['low'] < dataframe['ema_100_1h'])
-            item_buy_logic.append(dataframe['close'] > dataframe['ema_100_1h'])
-            item_buy_logic.append(dataframe['rsi_1h'] > self.buy_rsi_1h_min_19.value)
-            item_buy_logic.append(dataframe['chop'] < self.buy_chop_min_19.value)
-            item_buy_logic.append(dataframe['moderi_96'] == True)
-            item_buy_logic.append(dataframe['volume'] > 0)
-            item_buy = reduce(lambda x, y: x & y, item_buy_logic)
-            conditions.append(item_buy)
-
-            dataframe.loc[item_buy,'buy_condition_19'] = True
-
-        # Buy Condition #20
-        dataframe.loc[:,'buy_condition_20'] = False
-        # -----------------------------------------------------------------------------------------
-        if self.buy_params['buy_condition_20_enable']:
-            # Non-Standard protections (add below)
-
-            # Logic
-            item_buy_logic = []
-            item_buy_logic.append(reduce(lambda x, y: x & y, buy_protection_list[19]))
-            item_buy_logic.append(dataframe['rsi'] < self.buy_rsi_20.value)
-            item_buy_logic.append(dataframe['rsi_1h'] < self.buy_rsi_1h_20.value)
-            item_buy_logic.append(dataframe['cti'] < self.buy_cti_20.value)
-            item_buy_logic.append(dataframe['volume'] < (dataframe['volume_mean_4'] * self.buy_volume_20.value))
-            item_buy_logic.append(dataframe['volume'] > 0)
-            item_buy = reduce(lambda x, y: x & y, item_buy_logic)
-            conditions.append(item_buy)
-
-            dataframe.loc[item_buy,'buy_condition_20'] = True
-
-        # Buy Condition #21
-        dataframe.loc[:,'buy_condition_21'] = False
-        # -----------------------------------------------------------------------------------------
-        if self.buy_params['buy_condition_21_enable']:
-            # Non-Standard protections (add below)
-
-            # Logic
-            item_buy_logic = []
-            item_buy_logic.append(reduce(lambda x, y: x & y, buy_protection_list[20]))
-            item_buy_logic.append(dataframe['rsi'] < self.buy_rsi_21.value)
-            item_buy_logic.append(dataframe['rsi_1h'] < self.buy_rsi_1h_21.value)
-            item_buy_logic.append(dataframe['cti'] < self.buy_cti_21.value)
-            item_buy_logic.append(dataframe['volume'] < (dataframe['volume_mean_4'] * self.buy_volume_21.value))
-            item_buy_logic.append(dataframe['volume'] > 0)
-            item_buy = reduce(lambda x, y: x & y, item_buy_logic)
-            conditions.append(item_buy)
-
-            dataframe.loc[item_buy,'buy_condition_21'] = True
-
-        # Buy Condition #22
-        dataframe.loc[:,'buy_condition_22'] = False
-        # -----------------------------------------------------------------------------------------
-        if self.buy_params['buy_condition_22_enable']:
-            # Non-Standard protections (add below)
-            buy_protection_list[21].append(dataframe['ema_100_1h'] > dataframe['ema_100_1h'].shift(12))
-            buy_protection_list[21].append(dataframe['ema_200_1h'] > dataframe['ema_200_1h'].shift(36))
-
-            # Logic
-            item_buy_logic = []
-            item_buy_logic.append(reduce(lambda x, y: x & y, buy_protection_list[21]))
-            item_buy_logic.append((dataframe['volume_mean_4'] * self.buy_volume_22.value) > dataframe['volume'])
-            item_buy_logic.append(dataframe['close'] < dataframe['sma_30'] * self.buy_ma_offset_22.value)
-            item_buy_logic.append(dataframe['close'] < (dataframe['bb20_2_low'] * self.buy_bb_offset_22.value))
-            item_buy_logic.append(dataframe['ewo'] > self.buy_ewo_22.value)
-            item_buy_logic.append(dataframe['rsi'] < self.buy_rsi_22.value)
-            item_buy_logic.append(dataframe['safe_dump_20_1h'])
-            item_buy_logic.append(dataframe['volume'] > 0)
-            item_buy = reduce(lambda x, y: x & y, item_buy_logic)
-            conditions.append(item_buy)
-
-            dataframe.loc[item_buy,'buy_condition_22'] = True
-
-        # Buy Condition #23
-        dataframe.loc[:,'buy_condition_23'] = False
-        # -----------------------------------------------------------------------------------------
-        if self.buy_params['buy_condition_23_enable']:
-            # Non-Standard protections (add below)
-
-            # Logic
-            item_buy_logic = []
-            item_buy_logic.append(reduce(lambda x, y: x & y, buy_protection_list[22]))
-            item_buy_logic.append(dataframe['close'] < (dataframe['bb20_2_low'] * self.buy_bb_offset_23.value))
-            item_buy_logic.append(dataframe['ewo'] > self.buy_ewo_23.value)
-            item_buy_logic.append(dataframe['rsi'] < self.buy_rsi_23.value)
-            item_buy_logic.append(dataframe['rsi_1h'] < self.buy_rsi_1h_23.value)
-            item_buy_logic.append(dataframe['volume'] > 0)
-            item_buy = reduce(lambda x, y: x & y, item_buy_logic)
-            conditions.append(item_buy)
-
-            dataframe.loc[item_buy,'buy_condition_23'] = True
-
-        # Buy Condition #24
-        dataframe.loc[:,'buy_condition_24'] = False
-        # -----------------------------------------------------------------------------------------
-        if self.buy_params['buy_condition_24_enable']:
-            # Non-Standard protections (add below)
-
-            # Logic
-            item_buy_logic = []
-            item_buy_logic.append(reduce(lambda x, y: x & y, buy_protection_list[23]))
-            item_buy_logic.append(dataframe['ema_12_1h'].shift(12) < dataframe['ema_35_1h'].shift(12))
-            item_buy_logic.append(dataframe['ema_12_1h'] > dataframe['ema_35_1h'])
-            item_buy_logic.append(dataframe['cmf_1h'].shift(12) < 0)
-            item_buy_logic.append(dataframe['cmf_1h'] > 0)
-            item_buy_logic.append(dataframe['rsi'] < self.buy_24_rsi_max.value)
-            item_buy_logic.append(dataframe['rsi_1h'] > self.buy_24_rsi_1h_min.value)
-            item_buy_logic.append(dataframe['volume'] > 0)
-            item_buy = reduce(lambda x, y: x & y, item_buy_logic)
-            conditions.append(item_buy)
-
-            dataframe.loc[item_buy,'buy_condition_24'] = True
-
-        # Buy Condition #25
-        dataframe.loc[:,'buy_condition_25'] = False
-        # -----------------------------------------------------------------------------------------
-        if self.buy_params['buy_condition_25_enable']:
-            # Non-Standard protections (add below)
-
-            # Logic
-            item_buy_logic = []
-            item_buy_logic.append(reduce(lambda x, y: x & y, buy_protection_list[24]))
-            item_buy_logic.append(dataframe['rsi_20'] < dataframe['rsi_20'].shift())
-            item_buy_logic.append(dataframe['rsi_4'] < self.buy_25_rsi_14.value)
-            item_buy_logic.append(dataframe['ema_20_1h'] > dataframe['ema_26_1h'])
-            item_buy_logic.append(dataframe['close'] < (dataframe['sma_20'] * self.buy_25_ma_offset.value))
-            item_buy_logic.append(dataframe['open'] > (dataframe['sma_20'] * self.buy_25_ma_offset.value))
-            item_buy_logic.append(
-                (dataframe['open'] < dataframe['ema_20_1h']) & (dataframe['low'] < dataframe['ema_20_1h']) |
-                (dataframe['open'] > dataframe['ema_20_1h']) & (dataframe['low'] > dataframe['ema_20_1h'])
-            )
-            item_buy_logic.append(dataframe['cti'] < self.buy_25_cti.value)
-            item_buy = reduce(lambda x, y: x & y, item_buy_logic)
-            conditions.append(item_buy)
-
-            dataframe.loc[item_buy,'buy_condition_25'] = True
-
-        # Buy Condition #26
-        dataframe.loc[:,'buy_condition_26'] = False
-        # -----------------------------------------------------------------------------------------
-        if self.buy_params['buy_condition_26_enable']:
-            # Non-Standard protections (add below)
-
-            # Logic
-            item_buy_logic = []
-            item_buy_logic.append(reduce(lambda x, y: x & y, buy_protection_list[25]))
-            item_buy_logic.append(dataframe['close'] < (dataframe['zema_61'] * self.buy_26_zema_low_offset.value))
-            item_buy_logic.append(dataframe['volume'] > 0)
-            item_buy = reduce(lambda x, y: x & y, item_buy_logic)
-            conditions.append(item_buy)
-
-            dataframe.loc[item_buy,'buy_condition_26'] = True
-
-        # Buy Condition #27
-        dataframe.loc[:,'buy_condition_27'] = False
-        # -----------------------------------------------------------------------------------------
-        if self.buy_params['buy_condition_27_enable']:
-            # Non-Standard protections (add below)
-
-            # Logic
-            item_buy_logic = []
-            item_buy_logic.append(reduce(lambda x, y: x & y, buy_protection_list[26]))
-            item_buy_logic.append(dataframe['r_480'] < -self.buy_27_wr_max.value)
-            item_buy_logic.append(dataframe['r_480_1h'] < -self.buy_27_wr_1h_max.value)
-            item_buy_logic.append(dataframe['rsi_1h'] + dataframe['rsi'] < self.buy_27_rsi_max.value)
-            item_buy_logic.append(dataframe['cti'] < self.buy_27_cti.value)
-            item_buy_logic.append(dataframe['volume'] < (dataframe['volume_mean_4'] * self.buy_27_volume.value))
-            item_buy_logic.append(dataframe['volume'] > 0)
-            item_buy = reduce(lambda x, y: x & y, item_buy_logic)
-            conditions.append(item_buy)
-
-            dataframe.loc[item_buy,'buy_condition_27'] = True
-
-        # Buy Condition #28
-        dataframe.loc[:,'buy_condition_28'] = False
-        # -----------------------------------------------------------------------------------------
-        if self.buy_params['buy_condition_28_enable']:
-            # Non-Standard protections (add below)
-
-            # Logic
-            item_buy_logic = []
-            item_buy_logic.append(reduce(lambda x, y: x & y, buy_protection_list[27]))
-            item_buy_logic.append(dataframe['moderi_64'] == True)
-            item_buy_logic.append(dataframe['close'] < dataframe['hull_75'] * self.buy_28_ma_offset.value)
-            item_buy_logic.append(dataframe['ewo'] > self.buy_28_ewo.value)
-            item_buy_logic.append(dataframe['rsi'] < self.buy_28_rsi.value)
-            item_buy_logic.append(dataframe['cti'] < self.buy_28_cti.value)
-            item_buy_logic.append(dataframe['volume'] > 0)
-            item_buy = reduce(lambda x, y: x & y, item_buy_logic)
-            conditions.append(item_buy)
-
-            dataframe.loc[item_buy,'buy_condition_28'] = True
-
-        # Buy Condition #29
-        dataframe.loc[:,'buy_condition_29'] = False
-        # -----------------------------------------------------------------------------------------
-        if self.buy_params['buy_condition_29_enable']:
-            # Non-Standard protections (add below)
-
-            item_buy_logic = []
-            item_buy_logic.append(reduce(lambda x, y: x & y, buy_protection_list[28]))
-            item_buy_logic.append(dataframe['moderi_64'] == True)
-            item_buy_logic.append(dataframe['close'] < dataframe['hull_75'] * self.buy_29_ma_offset.value)
-            item_buy_logic.append(dataframe['ewo'] < self.buy_29_ewo.value)
-            item_buy_logic.append(dataframe['cti'] < self.buy_29_cti.value)
-            item_buy_logic.append(dataframe['volume'] > 0)
-            item_buy = reduce(lambda x, y: x & y, item_buy_logic)
-            conditions.append(item_buy)
-
-            dataframe.loc[item_buy,'buy_condition_29'] = True
-
-        # Buy Condition #30
-        dataframe.loc[:,'buy_condition_30'] = False
-        # -----------------------------------------------------------------------------------------
-        if self.buy_params['buy_condition_30_enable']:
-            # Non-Standard protections (add below)
-
-            item_buy_logic = []
-            item_buy_logic.append(reduce(lambda x, y: x & y, buy_protection_list[29]))
-            item_buy_logic.append(dataframe['moderi_64'] == False)
-            item_buy_logic.append(dataframe['close'] < dataframe['zlema_68'] * self.buy_30_ma_offset.value)
-            item_buy_logic.append(dataframe['ewo'] > self.buy_30_ewo.value)
-            item_buy_logic.append(dataframe['rsi'] < self.buy_30_rsi.value)
-            item_buy_logic.append(dataframe['cti'] < self.buy_30_cti.value)
-            item_buy_logic.append(dataframe['volume'] > 0)
-            item_buy = reduce(lambda x, y: x & y, item_buy_logic)
-            conditions.append(item_buy)
-
-            dataframe.loc[item_buy,'buy_condition_30'] = True
-
-        # Buy Condition #31
-        dataframe.loc[:,'buy_condition_31'] = False
-        # -----------------------------------------------------------------------------------------
-        if self.buy_params['buy_condition_31_enable']:
-            # Non-Standard protections (add below)
-
-            item_buy_logic = []
-            item_buy_logic.append(reduce(lambda x, y: x & y, buy_protection_list[30]))
-            item_buy_logic.append(dataframe['moderi_64'] == False)
-            item_buy_logic.append(dataframe['close'] < dataframe['zlema_68'] * self.buy_31_ma_offset.value )
-            item_buy_logic.append(dataframe['ewo'] < self.buy_31_ewo.value)
-            item_buy_logic.append(dataframe['r_480'] < self.buy_31_wr.value)
-            item_buy_logic.append(dataframe['volume'] > 0)
-            item_buy = reduce(lambda x, y: x & y, item_buy_logic)
-            conditions.append(item_buy)
-
-            dataframe.loc[item_buy,'buy_condition_31'] = True
-
-        # Buy Condition #32
-        dataframe.loc[:,'buy_condition_32'] = False
-        # Quick mode buy
-        # -----------------------------------------------------------------------------------------
-        if self.buy_params['buy_condition_32_enable']:
-            # Non-Standard protections (add below)
-
-            item_buy_logic = []
-            item_buy_logic.append(reduce(lambda x, y: x & y, buy_protection_list[31]))
-            item_buy_logic.append(dataframe['moderi_32'])
-            item_buy_logic.append(dataframe['moderi_64'])
-            item_buy_logic.append(dataframe['moderi_96'])
-            item_buy_logic.append(dataframe['cti'] < self.buy_32_cti.value)
-            item_buy_logic.append(dataframe['rsi_20'] < dataframe['rsi_20'].shift(1))
-            item_buy_logic.append(dataframe['rsi_4'] < self.buy_32_rsi.value)
-            item_buy_logic.append(dataframe['ema_20_1h'] > dataframe['ema_25_1h'])
-            item_buy_logic.append((dataframe['open'] - dataframe['close']) / dataframe['close'] < self.buy_32_dip.value)
-            item_buy_logic.append(dataframe['close'] < (dataframe['sma_15'] * self.buy_32_ma_offset.value))
-            item_buy_logic.append(
-                ((dataframe['open'] < dataframe['ema_20_1h']) & (dataframe['low'] < dataframe['ema_20_1h'])) |
-                ((dataframe['open'] > dataframe['ema_20_1h']) & (dataframe['low'] > dataframe['ema_20_1h'])))
-            item_buy_logic.append(dataframe['volume'] > 0)
-            item_buy = reduce(lambda x, y: x & y, item_buy_logic)
-            conditions.append(item_buy)
-
-            dataframe.loc[item_buy,'buy_condition_32'] = True
-
-        # Buy Condition #33
-        dataframe.loc[:,'buy_condition_33'] = False
-        # Quick mode buy
-        # -----------------------------------------------------------------------------------------
-        if self.buy_params['buy_condition_33_enable']:
-            # Non-Standard protections (add below)
-
-            item_buy_logic = []
-            item_buy_logic.append(reduce(lambda x, y: x & y, buy_protection_list[32]))
-            item_buy_logic.append(dataframe['moderi_96'])
-            item_buy_logic.append(dataframe['cti'] < self.buy_33_cti.value)
-            item_buy_logic.append(dataframe['close'] < (dataframe['ema_13'] * self.buy_33_ma_offset.value))
-            item_buy_logic.append(dataframe['ewo'] > self.buy_33_ewo.value)
-            item_buy_logic.append(dataframe['rsi'] < self.buy_33_rsi.value)
-            item_buy_logic.append(dataframe['volume'] < (dataframe['volume_mean_4'] * self.buy_33_volume.value))
-            item_buy_logic.append(dataframe['volume'] > 0)
-            item_buy = reduce(lambda x, y: x & y, item_buy_logic)
-            conditions.append(item_buy)
-
-            dataframe.loc[item_buy,'buy_condition_33'] = True
-
-        # Buy Condition #34
-        dataframe.loc[:,'buy_condition_34'] = False
-        # Quick mode buy
-        # -----------------------------------------------------------------------------------------
-        if self.buy_params['buy_condition_34_enable']:
-            # Non-Standard protections (add below)
-
-            item_buy_logic = []
-            item_buy_logic.append(reduce(lambda x, y: x & y, buy_protection_list[33]))
-            item_buy_logic.append(dataframe['cti'] < self.buy_34_cti.value)
-            item_buy_logic.append((dataframe['open'] - dataframe['close']) / dataframe['close'] < self.buy_34_dip.value)
-            item_buy_logic.append(dataframe['close'] < dataframe['ema_13'] * self.buy_34_ma_offset.value)
-            item_buy_logic.append(dataframe['ewo'] < self.buy_34_ewo.value)
-            item_buy_logic.append(dataframe['volume'] < (dataframe['volume_mean_4'] * self.buy_34_volume.value))
-            item_buy_logic.append(dataframe['volume'] > 0)
-            item_buy = reduce(lambda x, y: x & y, item_buy_logic)
-            conditions.append(item_buy)
-
-            dataframe.loc[item_buy,'buy_condition_34'] = True
+
+            if self.buy_params['buy_condition_' + str(index) + '_enable']:
+                # Standard protections - Common to every condition
+                # -----------------------------------------------------------------------------------------
+                if global_buy_protection_params["ema_fast"]:
+                    item_buy_protection_list.append(dataframe[f"ema_{global_buy_protection_params['ema_fast_len']}"] > dataframe['ema_200'])
+                if global_buy_protection_params["ema_slow"]:
+                    item_buy_protection_list.append(dataframe[f"ema_{global_buy_protection_params['ema_slow_len']}_1h"] > dataframe['ema_200_1h'])
+                if global_buy_protection_params["close_above_ema_fast"]:
+                    item_buy_protection_list.append(dataframe['close'] > dataframe[f"ema_{global_buy_protection_params['close_above_ema_fast_len']}"])
+                if global_buy_protection_params["close_above_ema_slow"]:
+                    item_buy_protection_list.append(dataframe['close'] > dataframe[f"ema_{global_buy_protection_params['close_above_ema_slow_len']}_1h"])
+                if global_buy_protection_params["sma200_rising"]:
+                    item_buy_protection_list.append(dataframe['sma_200'] > dataframe['sma_200'].shift(int(global_buy_protection_params['sma200_rising_val'])))
+                if global_buy_protection_params["sma200_1h_rising"]:
+                    item_buy_protection_list.append(dataframe['sma_200_1h'] > dataframe['sma_200_1h'].shift(int(global_buy_protection_params['sma200_1h_rising_val'])))
+                if global_buy_protection_params["safe_dips"]:
+                    item_buy_protection_list.append(dataframe[f"safe_dips_{global_buy_protection_params['safe_dips_type']}"])
+                if global_buy_protection_params["safe_pump"]:
+                    item_buy_protection_list.append(dataframe[f"safe_pump_{global_buy_protection_params['safe_pump_period']}_{global_buy_protection_params['safe_pump_type']}_1h"])
+                if global_buy_protection_params['btc_1h_not_downtrend']:
+                    item_buy_protection_list.append(dataframe['btc_not_downtrend_1h'])
+                if not self.config['runmode'].value in ('live', 'dry_run'):
+                    if self.has_bt_agefilter:
+                        item_buy_protection_list.append(dataframe['bt_agefilter_ok'])
+                else:
+                    if self.has_downtime_protection:
+                        item_buy_protection_list.append(dataframe['live_data_ok'])
+
+                # Buy conditions
+                # -----------------------------------------------------------------------------------------
+                item_buy_logic = []
+                item_buy_logic.append(reduce(lambda x, y: x & y, item_buy_protection_list))
+
+                # Condition #1
+                if index == 1:
+                    # Non-Standard protections
+
+                    # Logic
+                    item_buy_logic.append(((dataframe['close'] - dataframe['open'].rolling(36).min()) / dataframe['open'].rolling(36).min()) > self.buy_min_inc_1)
+                    item_buy_logic.append(dataframe['rsi_14_1h'] > self.buy_rsi_1h_min_1)
+                    item_buy_logic.append(dataframe['rsi_14_1h'] < self.buy_rsi_1h_max_1)
+                    item_buy_logic.append(dataframe['rsi_14'] < self.buy_rsi_1)
+                    item_buy_logic.append(dataframe['mfi'] < self.buy_mfi_1)
+                    item_buy_logic.append(dataframe['cti'] < self.buy_cti_1)
+
+                # Condition #2
+                elif index == 2:
+                    # Non-Standard protections
+
+                    # Logic
+                    item_buy_logic.append(dataframe['rsi_14'] < dataframe['rsi_14_1h'] - self.buy_rsi_1h_diff_2)
+                    item_buy_logic.append(dataframe['mfi'] < self.buy_mfi_2)
+                    item_buy_logic.append(dataframe['close'] < (dataframe['bb20_2_low'] * self.buy_bb_offset_2))
+                    item_buy_logic.append(dataframe['volume'] < (dataframe['volume_mean_4'] * self.buy_volume_2))
+
+                # Condition #3
+                elif index == 3:
+                    # Non-Standard protections
+                    item_buy_logic.append(dataframe['close'] > (dataframe['ema_200_1h'] * self.buy_ema_rel_3))
+
+                    # Logic
+                    item_buy_logic.append(dataframe['bb40_2_low'].shift().gt(0))
+                    item_buy_logic.append(dataframe['bb40_2_delta'].gt(dataframe['close'] * self.buy_bb40_bbdelta_close_3))
+                    item_buy_logic.append(dataframe['closedelta'].gt(dataframe['close'] * self.buy_bb40_closedelta_close_3))
+                    item_buy_logic.append(dataframe['tail'].lt(dataframe['bb40_2_delta'] * self.buy_bb40_tail_bbdelta_3))
+                    item_buy_logic.append(dataframe['close'].lt(dataframe['bb40_2_low'].shift()))
+                    item_buy_logic.append(dataframe['close'].le(dataframe['close'].shift()))
+                    item_buy_logic.append(dataframe['cti'] < self.buy_cti_3)
+
+                # Condition #4
+                elif index == 4:
+                    # Non-Standard protections
+
+                    # Logic
+                    item_buy_logic.append(dataframe['close'] < dataframe['ema_50'])
+                    item_buy_logic.append(dataframe['close'] < self.buy_bb20_close_bblowerband_4 * dataframe['bb20_2_low'])
+                    item_buy_logic.append(dataframe['volume'] < (dataframe['volume_mean_30'].shift(1) * self.buy_bb20_volume_4))
+                    item_buy_logic.append(dataframe['cti'] < self.buy_cti_4)
+
+                # Condition #5
+                elif index == 5:
+                    # Non-Standard protections
+                    item_buy_logic.append(dataframe['close'] > (dataframe['ema_200_1h'] * self.buy_ema_rel_5))
+
+                    # Logic
+                    item_buy_logic.append(dataframe['ema_26'] > dataframe['ema_12'])
+                    item_buy_logic.append((dataframe['ema_26'] - dataframe['ema_12']) > (dataframe['open'] * self.buy_ema_open_mult_5))
+                    item_buy_logic.append((dataframe['ema_26'].shift() - dataframe['ema_12'].shift()) > (dataframe['open'] / 100))
+                    item_buy_logic.append(dataframe['close'] < (dataframe['bb20_2_low'] * self.buy_bb_offset_5))
+                    item_buy_logic.append(dataframe['cti'] < self.buy_cti_5)
+                    item_buy_logic.append(dataframe['volume'] < (dataframe['volume_mean_4'] * self.buy_volume_5))
+
+                # Condition #6
+                elif index == 6:
+                    # Non-Standard protections
+
+                    # Logic
+                    item_buy_logic.append(dataframe['ema_26'] > dataframe['ema_12'])
+                    item_buy_logic.append((dataframe['ema_26'] - dataframe['ema_12']) > (dataframe['open'] * self.buy_ema_open_mult_6))
+                    item_buy_logic.append((dataframe['ema_26'].shift() - dataframe['ema_12'].shift()) > (dataframe['open'] / 100))
+                    item_buy_logic.append(dataframe['close'] < (dataframe['bb20_2_low'] * self.buy_bb_offset_6))
+
+                # Condition #7
+                elif index == 7:
+                    # Non-Standard protections
+
+                    # Logic
+                    item_buy_logic.append(dataframe['ema_26'] > dataframe['ema_12'])
+                    item_buy_logic.append((dataframe['ema_26'] - dataframe['ema_12']) > (dataframe['open'] * self.buy_ema_open_mult_7))
+                    item_buy_logic.append((dataframe['ema_26'].shift() - dataframe['ema_12'].shift()) > (dataframe['open'] / 100))
+                    item_buy_logic.append(dataframe['cti'] < self.buy_cti_7)
+
+                # Condition #8
+                elif index == 8:
+                    # Non-Standard protections
+
+                    # Logic
+                    item_buy_logic.append(dataframe['moderi_96'])
+                    item_buy_logic.append(dataframe['cti'] < self.buy_cti_8)
+                    item_buy_logic.append(dataframe['close'] < (dataframe['bb20_2_low'] * self.buy_bb_offset_8))
+                    item_buy_logic.append(dataframe['rsi_14_1h'] < self.buy_rsi_1h_8)
+                    item_buy_logic.append(dataframe['volume'] < (dataframe['volume_mean_4'] * self.buy_volume_8))
+
+                # Condition #9
+                elif index == 9:
+                    # Non-Standard protections
+                    item_buy_logic.append(dataframe['ema_50'] > dataframe['ema_200'])
+
+                    # Logic
+                    item_buy_logic.append(dataframe['close'] < dataframe['ema_20'] * self.buy_ma_offset_9)
+                    item_buy_logic.append(dataframe['close'] < dataframe['bb20_2_low'] * self.buy_bb_offset_9)
+                    item_buy_logic.append(dataframe['rsi_14_1h'] > self.buy_rsi_1h_min_9)
+                    item_buy_logic.append(dataframe['rsi_14_1h'] < self.buy_rsi_1h_max_9)
+                    item_buy_logic.append(dataframe['mfi'] < self.buy_mfi_9)
+
+                # Condition #10
+                elif index == 10:
+                    # Non-Standard protections
+                    item_buy_logic.append(dataframe['ema_50_1h'] > dataframe['ema_100_1h'])
+
+                    # Logic
+                    item_buy_logic.append(dataframe['close'] < dataframe['sma_30'] * self.buy_ma_offset_10)
+                    item_buy_logic.append(dataframe['close'] < dataframe['bb20_2_low'] * self.buy_bb_offset_10)
+                    item_buy_logic.append(dataframe['rsi_14_1h'] < self.buy_rsi_1h_10)
+
+                # Condition #11
+                elif index == 11:
+                    # Non-Standard protections
+                    item_buy_logic.append(dataframe['ema_50_1h'] > dataframe['ema_100_1h'])
+
+                    # Logic
+                    item_buy_logic.append(((dataframe['close'] - dataframe['open'].rolling(36).min()) / dataframe['open'].rolling(36).min()) > self.buy_min_inc_11)
+                    item_buy_logic.append(dataframe['close'] < dataframe['sma_30'] * self.buy_ma_offset_11)
+                    item_buy_logic.append(dataframe['rsi_14_1h'] > self.buy_rsi_1h_min_11)
+                    item_buy_logic.append(dataframe['rsi_14_1h'] < self.buy_rsi_1h_max_11)
+                    item_buy_logic.append(dataframe['rsi_14'] < self.buy_rsi_11)
+                    item_buy_logic.append(dataframe['mfi'] < self.buy_mfi_11)
+
+                # Condition #12
+                elif index == 12:
+                    # Non-Standard protections
+
+                    # Logic
+                    item_buy_logic.append(dataframe['close'] < dataframe['sma_30'] * self.buy_ma_offset_12)
+                    item_buy_logic.append(dataframe['ewo'] > self.buy_ewo_12)
+                    item_buy_logic.append(dataframe['rsi_14'] < self.buy_rsi_12)
+                    item_buy_logic.append(dataframe['cti'] < self.buy_cti_12)
+
+                # Condition #13
+                elif index == 13:
+                    # Non-Standard protections
+                    item_buy_logic.append(dataframe['ema_50_1h'] > dataframe['ema_100_1h'])
+
+                    # Logic
+                    item_buy_logic.append(dataframe['close'] < dataframe['sma_30'] * self.buy_13_ma_offset)
+                    item_buy_logic.append(dataframe['cti'] < self.buy_13_cti)
+                    item_buy_logic.append(dataframe['ewo'] < self.buy_13_ewo)
+                    item_buy_logic.append(dataframe['r_480_1h'] < self.buy_13_r_1h)
+
+                # Condition #14
+                elif index == 14:
+                    # Non-Standard protections
+
+                    # Logic
+                    item_buy_logic.append(dataframe['ema_26'] > dataframe['ema_12'])
+                    item_buy_logic.append((dataframe['ema_26'] - dataframe['ema_12']) > (dataframe['open'] * self.buy_ema_open_mult_14))
+                    item_buy_logic.append((dataframe['ema_26'].shift() - dataframe['ema_12'].shift()) > (dataframe['open'] / 100))
+                    item_buy_logic.append(dataframe['close'] < (dataframe['bb20_2_low'] * self.buy_bb_offset_14))
+                    item_buy_logic.append(dataframe['close'] < dataframe['ema_20'] * self.buy_ma_offset_14)
+                    item_buy_logic.append(dataframe['cti'] < self.buy_cti_14)
+
+                # Condition #15
+                elif index == 15:
+                    # Non-Standard protections
+                    item_buy_logic.append(dataframe['close'] > dataframe['ema_200_1h'] * self.buy_ema_rel_15)
+
+                    # Logic
+                    item_buy_logic.append(dataframe['ema_26'] > dataframe['ema_12'])
+                    item_buy_logic.append((dataframe['ema_26'] - dataframe['ema_12']) > (dataframe['open'] * self.buy_ema_open_mult_15))
+                    item_buy_logic.append((dataframe['ema_26'].shift() - dataframe['ema_12'].shift()) > (dataframe['open'] / 100))
+                    item_buy_logic.append(dataframe['rsi_14'] < self.buy_rsi_15)
+                    item_buy_logic.append(dataframe['close'] < dataframe['ema_20'] * self.buy_ma_offset_15)
+
+                # Condition #16
+                elif index == 16:
+                    # Non-Standard protections
+
+                    # Logic
+                    item_buy_logic.append(dataframe['close'] < dataframe['ema_20'] * self.buy_ma_offset_16)
+                    item_buy_logic.append(dataframe['ewo'] > self.buy_ewo_16)
+                    item_buy_logic.append(dataframe['rsi_14'] < self.buy_rsi_16)
+                    item_buy_logic.append(dataframe['cti'] < self.buy_cti_16)
+
+                # Condition #17
+                elif index == 17:
+                    # Non-Standard protections
+
+                    # Logic
+                    item_buy_logic.append(dataframe['close'] < dataframe['ema_20'] * self.buy_17_ma_offset)
+                    item_buy_logic.append(dataframe['ewo'] < self.buy_17_ewo)
+                    item_buy_logic.append(dataframe['cti'] < self.buy_17_cti)
+                    item_buy_logic.append(dataframe['cti_1h'] > self.buy_17_cti_1h)
+                    item_buy_logic.append(dataframe['r_480_1h'] < self.buy_17_r_1h)
+                    item_buy_logic.append(dataframe['volume'] < (dataframe['volume_mean_4'] * self.buy_17_volume))
+
+                # Condition #18
+                elif index == 18:
+                    # Non-Standard protections
+                    item_buy_logic.append(dataframe['sma_200'] > dataframe['sma_200'].shift(20))
+                    item_buy_logic.append(dataframe['sma_200_1h'] > dataframe['sma_200_1h'].shift(36))
+
+                    # Logic
+                    item_buy_logic.append(dataframe['rsi_14'] < self.buy_rsi_18)
+                    item_buy_logic.append(dataframe['close'] < (dataframe['bb20_2_low'] * self.buy_bb_offset_18))
+                    item_buy_logic.append(dataframe['volume'] < (dataframe['volume_mean_4'] * self.buy_volume_18))
+                    item_buy_logic.append(dataframe['cti'] < self.buy_cti_18)
+
+                # Condition #19
+                elif index == 19:
+                    # Non-Standard protections
+
+                    # Logic
+                    item_buy_logic.append(dataframe['close'].shift(1) > dataframe['ema_100_1h'])
+                    item_buy_logic.append(dataframe['low'] < dataframe['ema_100_1h'])
+                    item_buy_logic.append(dataframe['close'] > dataframe['ema_100_1h'])
+                    item_buy_logic.append(dataframe['rsi_14_1h'] > self.buy_rsi_1h_min_19)
+                    item_buy_logic.append(dataframe['chop'] < self.buy_chop_max_19)
+                    item_buy_logic.append(dataframe['moderi_32'] == True)
+                    item_buy_logic.append(dataframe['moderi_64'] == True)
+                    item_buy_logic.append(dataframe['moderi_96'] == True)
+
+                # Condition #20
+                elif index == 20:
+                    # Non-Standard protections
+
+                    # Logic
+                    item_buy_logic.append(dataframe['rsi_14'] < self.buy_rsi_20)
+                    item_buy_logic.append(dataframe['rsi_14_1h'] < self.buy_rsi_1h_20)
+                    item_buy_logic.append(dataframe['cti'] < self.buy_cti_20)
+                    item_buy_logic.append(dataframe['volume'] < (dataframe['volume_mean_4'] * self.buy_volume_20))
+
+                # Condition #21
+                elif index == 21:
+                    # Non-Standard protections
+
+                    # Logic
+                    item_buy_logic.append(dataframe['rsi_14'] < self.buy_rsi_21)
+                    item_buy_logic.append(dataframe['rsi_14_1h'] < self.buy_rsi_1h_21)
+                    item_buy_logic.append(dataframe['cti'] < self.buy_cti_21)
+                    item_buy_logic.append(dataframe['volume'] < (dataframe['volume_mean_4'] * self.buy_volume_21))
+
+                # Condition #22
+                elif index == 22:
+                    # Non-Standard protections
+                    item_buy_logic.append(dataframe['ema_100_1h'] > dataframe['ema_100_1h'].shift(12))
+                    item_buy_logic.append(dataframe['ema_200_1h'] > dataframe['ema_200_1h'].shift(36))
+
+                    # Logic
+                    item_buy_logic.append((dataframe['volume_mean_4'] * self.buy_volume_22) > dataframe['volume'])
+                    item_buy_logic.append(dataframe['close'] < dataframe['sma_30'] * self.buy_ma_offset_22)
+                    item_buy_logic.append(dataframe['close'] < (dataframe['bb20_2_low'] * self.buy_bb_offset_22))
+                    item_buy_logic.append(dataframe['ewo'] > self.buy_ewo_22)
+                    item_buy_logic.append(dataframe['rsi_14'] < self.buy_rsi_22)
+
+                # Condition #23
+                elif index == 23:
+                    # Non-Standard protections
+
+                    # Logic
+                    item_buy_logic.append(dataframe['close'] < (dataframe['bb20_2_low'] * self.buy_23_bb_offset))
+                    item_buy_logic.append(dataframe['ewo'] > self.buy_23_ewo)
+                    item_buy_logic.append(dataframe['cti'] < self.buy_23_cti)
+                    item_buy_logic.append(dataframe['r_480'] > self.buy_23_r)
+                    item_buy_logic.append(dataframe['r_480_1h'] > self.buy_23_r_1h)
+                    item_buy_logic.append(dataframe['rsi_14'] < self.buy_23_rsi)
+                    item_buy_logic.append(dataframe['rsi_14_1h'] < self.buy_23_rsi_1h)
+
+                # Condition #24
+                elif index == 24:
+                    # Non-Standard protections
+
+                    # Logic
+                    item_buy_logic.append(dataframe['ema_12_1h'].shift(12) < dataframe['ema_35_1h'].shift(12))
+                    item_buy_logic.append(dataframe['ema_12_1h'] > dataframe['ema_35_1h'])
+                    item_buy_logic.append(dataframe['cmf_1h'].shift(12) < 0)
+                    item_buy_logic.append(dataframe['cmf_1h'] > 0)
+                    item_buy_logic.append(dataframe['rsi_14'] < self.buy_24_rsi_max)
+                    item_buy_logic.append(dataframe['rsi_14_1h'] > self.buy_24_rsi_1h_min)
+
+                # Condition #25
+                elif index == 25:
+                    # Non-Standard protections
+
+                    # Logic
+                    item_buy_logic.append(dataframe['rsi_20'] < dataframe['rsi_20'].shift())
+                    item_buy_logic.append(dataframe['rsi_4'] < self.buy_25_rsi_4)
+                    item_buy_logic.append(dataframe['ema_20_1h'] > dataframe['ema_26_1h'])
+                    item_buy_logic.append(dataframe['close'] < (dataframe['sma_20'] * self.buy_25_ma_offset))
+                    item_buy_logic.append(dataframe['open'] > (dataframe['sma_20'] * self.buy_25_ma_offset))
+                    item_buy_logic.append(
+                        (dataframe['open'] < dataframe['ema_20_1h']) & (dataframe['low'] < dataframe['ema_20_1h']) |
+                        (dataframe['open'] > dataframe['ema_20_1h']) & (dataframe['low'] > dataframe['ema_20_1h'])
+                    )
+                    item_buy_logic.append(dataframe['cti'] < self.buy_25_cti)
+
+                # Condition #26
+                elif index == 26:
+                    # Non-Standard protections
+                    item_buy_logic.append(dataframe['close'] < dataframe['sma_75'])
+
+                    # Logic
+                    item_buy_logic.append(dataframe['close'] < (dataframe['zema_61'] * self.buy_26_zema_low_offset))
+                    item_buy_logic.append(dataframe['cti'] < self.buy_26_cti)
+                    item_buy_logic.append(dataframe['r_480'] > self.buy_26_r)
+                    item_buy_logic.append(dataframe['r_480_1h'] > self.buy_26_r_1h)
+                    item_buy_logic.append(dataframe['volume'] < (dataframe['volume_mean_4'] * self.buy_26_volume))
+
+                # Condition #27
+                elif index == 27:
+                    # Non-Standard protections
+
+                    # Logic
+                    item_buy_logic.append(dataframe['r_480'] < -self.buy_27_wr_max)
+                    item_buy_logic.append(dataframe['r_480_1h'] < -self.buy_27_wr_1h_max)
+                    item_buy_logic.append(dataframe['rsi_14_1h'] + dataframe['rsi_14'] < self.buy_27_rsi_max)
+                    item_buy_logic.append(dataframe['cti'] < self.buy_27_cti)
+                    item_buy_logic.append(dataframe['volume'] < (dataframe['volume_mean_4'] * self.buy_27_volume))
+
+                # Condition #28
+                elif index == 28:
+                    # Non-Standard protections
+
+                    # Logic
+                    item_buy_logic.append(dataframe['moderi_64'] == True)
+                    item_buy_logic.append(dataframe['close'] < dataframe['hull_75'] * self.buy_28_ma_offset)
+                    item_buy_logic.append(dataframe['ewo'] > self.buy_28_ewo)
+                    item_buy_logic.append(dataframe['rsi_14'] < self.buy_28_rsi)
+                    item_buy_logic.append(dataframe['cti'] < self.buy_28_cti)
+
+                # Condition #29
+                elif index == 29:
+                    # Non-Standard protections
+
+                    # Logic
+                    item_buy_logic.append(dataframe['moderi_64'] == True)
+                    item_buy_logic.append(dataframe['close'] < dataframe['hull_75'] * self.buy_29_ma_offset)
+                    item_buy_logic.append(dataframe['ewo'] < self.buy_29_ewo)
+                    item_buy_logic.append(dataframe['cti'] < self.buy_29_cti)
+
+                # Condition #30
+                elif index == 30:
+                    # Non-Standard protections
+
+                    # Logic
+                    item_buy_logic.append(dataframe['moderi_64'] == False)
+                    item_buy_logic.append(dataframe['close'] < dataframe['zlema_68'] * self.buy_30_ma_offset)
+                    item_buy_logic.append(dataframe['ewo'] > self.buy_30_ewo)
+                    item_buy_logic.append(dataframe['rsi_14'] < self.buy_30_rsi)
+                    item_buy_logic.append(dataframe['cti'] < self.buy_30_cti)
+
+                # Condition #31
+                elif index == 31:
+                    # Non-Standard protections
+
+                    # Logic
+                    item_buy_logic.append(dataframe['moderi_64'] == False)
+                    item_buy_logic.append(dataframe['close'] < dataframe['zlema_68'] * self.buy_31_ma_offset )
+                    item_buy_logic.append(dataframe['ewo'] < self.buy_31_ewo)
+                    item_buy_logic.append(dataframe['r_480'] < self.buy_31_wr)
+                    item_buy_logic.append(dataframe['cti'] < self.buy_31_cti)
+
+                # Condition #32 - Quick mode buy
+                elif index == 32:
+                    # Non-Standard protections
+
+                    # Logic
+                    item_buy_logic.append(dataframe['rsi_20'] < dataframe['rsi_20'].shift(1))
+                    item_buy_logic.append(dataframe['rsi_4'] < self.buy_32_rsi)
+                    item_buy_logic.append(dataframe['ema_20_1h'] > dataframe['ema_25_1h'])
+                    item_buy_logic.append(dataframe['close'] < (dataframe['sma_15'] * self.buy_32_ma_offset))
+                    item_buy_logic.append(
+                        ((dataframe['open'] < dataframe['ema_20_1h']) & (dataframe['low'] < dataframe['ema_20_1h'])) |
+                        ((dataframe['open'] > dataframe['ema_20_1h']) & (dataframe['low'] > dataframe['ema_20_1h'])))
+                    item_buy_logic.append(dataframe['cti'] < self.buy_32_cti)
+                    item_buy_logic.append(dataframe['cti_1h'] > self.buy_32_cti_1h)
+                    item_buy_logic.append(dataframe['r_480_1h'] < self.buy_32_r_480_1h)
+                    item_buy_logic.append(dataframe['crsi_1h'] > self.buy_32_crsi_1h)
+
+                # Condition #33 - Quick mode buy
+                elif index == 33:
+                    # Non-Standard protections
+
+                    # Logic
+                    item_buy_logic.append(dataframe['moderi_96'])
+                    item_buy_logic.append(dataframe['cti'] < self.buy_33_cti)
+                    item_buy_logic.append(dataframe['close'] < (dataframe['ema_13'] * self.buy_33_ma_offset))
+                    item_buy_logic.append(dataframe['ewo'] > self.buy_33_ewo)
+                    item_buy_logic.append(dataframe['rsi_14'] < self.buy_33_rsi)
+                    item_buy_logic.append(dataframe['volume'] < (dataframe['volume_mean_4'] * self.buy_33_volume))
+
+                # Condition #34 - Quick mode buy
+                elif index == 34:
+                    # Non-Standard protections
+
+                    # Logic
+                    item_buy_logic.append(dataframe['cti'] < self.buy_34_cti)
+                    item_buy_logic.append((dataframe['open'] - dataframe['close']) / dataframe['close'] < self.buy_34_dip)
+                    item_buy_logic.append(dataframe['close'] < dataframe['ema_13'] * self.buy_34_ma_offset)
+                    item_buy_logic.append(dataframe['ewo'] < self.buy_34_ewo)
+                    item_buy_logic.append(dataframe['volume'] < (dataframe['volume_mean_4'] * self.buy_34_volume))
+
+                # Condition #35 - PMAX0 buy
+                elif index == 35:
+                    # Non-Standard protections
+
+                    # Logic
+                    item_buy_logic.append(dataframe['pm'] <= dataframe['pmax_thresh'])
+                    item_buy_logic.append(dataframe['close'] < dataframe['sma_75'] * self.buy_35_ma_offset)
+                    item_buy_logic.append(dataframe['ewo'] > self.buy_35_ewo)
+                    item_buy_logic.append(dataframe['rsi_14'] < self.buy_35_rsi)
+                    item_buy_logic.append(dataframe['cti'] < self.buy_35_cti)
+
+                # Condition #36 - PMAX1 buy
+                elif index == 36:
+                    # Non-Standard protections (add below)
+
+                    # Logic
+                    item_buy_logic.append(dataframe['pm'] <= dataframe['pmax_thresh'])
+                    item_buy_logic.append(dataframe['close'] < dataframe['sma_75'] * self.buy_36_ma_offset)
+                    item_buy_logic.append(dataframe['ewo'] < self.buy_36_ewo)
+                    item_buy_logic.append(dataframe['cti'] < self.buy_36_cti)
+
+                # Condition #37 - PMAX2 buy
+                elif index == 37:
+                    # Non-Standard protections (add below)
+
+                    # Logic
+                    item_buy_logic.append(dataframe['pm'] > dataframe['pmax_thresh'])
+                    item_buy_logic.append(dataframe['close'] < dataframe['sma_75'] * self.buy_37_ma_offset)
+                    item_buy_logic.append(dataframe['ewo'] > self.buy_37_ewo)
+                    item_buy_logic.append(dataframe['rsi_14'] < self.buy_37_rsi)
+                    item_buy_logic.append(dataframe['cti'] < self.buy_37_cti)
+                    item_buy_logic.append(dataframe['safe_dump_50_1h'])
+
+                # Condition #38 - PMAX3 buy
+                elif index == 38:
+                    # Non-Standard protections (add below)
+
+                    # Logic
+                    item_buy_logic.append(dataframe['pm'] > dataframe['pmax_thresh'])
+                    item_buy_logic.append(dataframe['close'] < dataframe['sma_75'] * self.buy_38_ma_offset)
+                    item_buy_logic.append(dataframe['ewo'] < self.buy_38_ewo)
+                    item_buy_logic.append(dataframe['cti'] < self.buy_38_cti)
+
+                # Condition #39 - Ichimoku
+                elif index == 39:
+                    # Non-Standard protections (add below)
+
+                    # Logic
+                    item_buy_logic.append(dataframe['tenkan_sen_1h'] > dataframe['kijun_sen_1h'])
+                    item_buy_logic.append(dataframe['close'] > dataframe['cloud_top_1h'])
+                    item_buy_logic.append(dataframe['leading_senkou_span_a_1h'] > dataframe['leading_senkou_span_b_1h'])
+                    item_buy_logic.append(dataframe['chikou_span_greater_1h'])
+                    item_buy_logic.append(dataframe['efi_1h'] > 0)
+                    item_buy_logic.append(dataframe['ssl_up_1h'] > dataframe['ssl_down_1h'])
+                    item_buy_logic.append(dataframe['close'] < dataframe['ssl_up_1h'])
+                    item_buy_logic.append(dataframe['cti'] < self.buy_39_cti)
+                    item_buy_logic.append(dataframe['r_480'] > self.buy_39_r)
+                    item_buy_logic.append(dataframe['r_480_1h'] > self.buy_39_r_1h)
+                    item_buy_logic.append(dataframe['rsi_14_1h'] > dataframe['rsi_14_1h'].shift(12))
+                    # Start of trend
+                    item_buy_logic.append(
+                        (dataframe['leading_senkou_span_a_1h'].shift(12) < dataframe['leading_senkou_span_b_1h'].shift(12)) |
+                        (dataframe['ssl_up_1h'].shift(12) < dataframe['ssl_down_1h'].shift(12))
+                    )
+
+                # Condition #40 - ZLEMA X buy
+                elif index == 40:
+                    # Non-Standard protections (add below)
+
+                    # Logic
+                    item_buy_logic.append(qtpylib.crossed_above(dataframe['zlema_2'], dataframe['zlema_4']))
+                    item_buy_logic.append(dataframe['hrsi'] < self.buy_40_hrsi)
+                    item_buy_logic.append(dataframe['cci'] < self.buy_40_cci)
+                    item_buy_logic.append(dataframe['rsi_14'] < self.buy_40_rsi)
+                    item_buy_logic.append(dataframe['cti'] < self.buy_40_cti)
+                    item_buy_logic.append(dataframe['r_480'] > self.buy_40_r)
+                    item_buy_logic.append(dataframe['r_480_1h'] > self.buy_40_r_1h)
+
+                # Condition #41
+                elif index == 41:
+                    # Non-Standard protections (add below)
+
+                    # Logic
+                    item_buy_logic.append(dataframe['ema_200_1h'] > dataframe['ema_200_1h'].shift(12))
+                    item_buy_logic.append(dataframe['ema_200_1h'].shift(12) > dataframe['ema_200_1h'].shift(24))
+                    item_buy_logic.append(dataframe['cti_1h'] < self.buy_41_cti_1h)
+                    item_buy_logic.append(dataframe['r_480_1h'] > self.buy_41_r_1h)
+                    item_buy_logic.append(dataframe['close'] < dataframe['sma_75'] * self.buy_41_ma_offset)
+                    item_buy_logic.append(dataframe['cti'] < self.buy_41_cti)
+                    item_buy_logic.append(dataframe['r_480'] < self.buy_41_r)
+
+                # Condition #42
+                elif index == 42:
+                    # Non-Standard protections (add below)
+
+                    # Logic
+                    item_buy_logic.append(dataframe['ema_200_1h'] > dataframe['ema_200_1h'].shift(12))
+                    item_buy_logic.append(dataframe['ema_200_1h'].shift(12) > dataframe['ema_200_1h'].shift(24))
+                    item_buy_logic.append(dataframe['cti_1h'] < self.buy_42_cti_1h)
+                    item_buy_logic.append(dataframe['r_480_1h'] > self.buy_42_r_1h)
+                    item_buy_logic.append(dataframe['ema_26'] > dataframe['ema_12'])
+                    item_buy_logic.append((dataframe['ema_26'] - dataframe['ema_12']) > (dataframe['open'] * self.buy_42_ema_open_mult))
+                    item_buy_logic.append((dataframe['ema_26'].shift() - dataframe['ema_12'].shift()) > (dataframe['open'] / 100))
+                    item_buy_logic.append(dataframe['close'] < (dataframe['bb20_2_low'] * self.buy_42_bb_offset))
+
+                # Condition #43
+                elif index == 43:
+                    # Non-Standard protections
+
+                    # Logic
+                    item_buy_logic.append(dataframe['ema_200_1h'] > dataframe['ema_200_1h'].shift(12))
+                    item_buy_logic.append(dataframe['ema_200_1h'].shift(12) > dataframe['ema_200_1h'].shift(24))
+                    item_buy_logic.append(dataframe['cti_1h'] < self.buy_43_cti_1h)
+                    item_buy_logic.append(dataframe['r_480_1h'] > self.buy_43_r_1h)
+                    item_buy_logic.append(dataframe['bb40_2_low'].shift().gt(0))
+                    item_buy_logic.append(dataframe['bb40_2_delta'].gt(dataframe['close'] * self.buy_43_bb40_bbdelta_close))
+                    item_buy_logic.append(dataframe['closedelta'].gt(dataframe['close'] * self.buy_43_bb40_closedelta_close))
+                    item_buy_logic.append(dataframe['tail'].lt(dataframe['bb40_2_delta'] * self.buy_43_bb40_tail_bbdelta))
+                    item_buy_logic.append(dataframe['close'].lt(dataframe['bb40_2_low'].shift()))
+                    item_buy_logic.append(dataframe['close'].le(dataframe['close'].shift()))
+                    item_buy_logic.append(dataframe['cti'] < self.buy_43_cti)
+                    item_buy_logic.append(dataframe['r_480'] > self.buy_43_r)
+
+                # Condition #44
+                elif index == 44:
+                    # Non-Standard protections
+
+                    # Logic
+                    item_buy_logic.append(dataframe['close'] < (dataframe['ema_16'] * self.buy_44_ma_offset))
+                    item_buy_logic.append(dataframe['ewo'] < self.buy_44_ewo)
+                    item_buy_logic.append(dataframe['cti'] < self.buy_44_cti)
+                    item_buy_logic.append(dataframe['crsi_1h'] > self.buy_44_crsi_1h)
+
+                item_buy_logic.append(dataframe['volume'] > 0)
+                item_buy = reduce(lambda x, y: x & y, item_buy_logic)
+                dataframe.loc[item_buy, 'buy_tag'] += str(index) + ' '
+                conditions.append(item_buy)
 
         if conditions:
             dataframe.loc[:, 'buy'] = reduce(lambda x, y: x | y, conditions)
@@ -3971,6 +3899,7 @@ class NostalgiaForInfinityNext(IStrategy):
 
     def populate_sell_trend(self, dataframe: DataFrame, metadata: dict) -> DataFrame:
         dataframe.loc[:, 'sell'] = 0
+
         return dataframe
 
     def confirm_trade_exit(self, pair: str, trade: "Trade", order_type: str, amount: float,
@@ -3997,19 +3926,50 @@ class NostalgiaForInfinityNext(IStrategy):
         :return bool: When True is returned, then the sell-order is placed on the exchange.
             False aborts the process
         """
+        if self._should_hold_trade(trade, rate, sell_reason):
+            return False
+
+        self._remove_profit_target(pair)
+        return True
+
+    def _set_profit_target(self, pair: str, sell_reason: str, rate: float, current_time: "datetime"):
+        self.target_profit_cache.data[pair] = {
+            "rate": rate,
+            "sell_reason": sell_reason,
+            "time_profit_reached": current_time.isoformat()
+        }
+        self.target_profit_cache.save()
+
+    def _remove_profit_target(self, pair: str):
+        if self.target_profit_cache is not None:
+            self.target_profit_cache.data.pop(pair, None)
+            self.target_profit_cache.save()
+
+    def _should_hold_trade(self, trade: "Trade", rate: float, sell_reason: str) -> bool:
+        if self.config['runmode'].value not in ('live', 'dry_run'):
+            return False
+
+        if not self.holdSupportEnabled:
+            return False
+
         # Just to be sure our hold data is loaded, should be a no-op call after the first bot loop
-        if self.config['runmode'].value in ('live', 'dry_run'):
-            self.load_hold_trades_config()
+        self.load_hold_trades_config()
 
-            if not self.hold_trade_ids:
-                # We have no pairs we want to hold until profit, sell
-                return True
+        if not self.hold_trades_cache:
+            # Cache hasn't been setup, likely because the corresponding file does not exist, sell
+            return False
 
-            if trade.id not in self.hold_trade_ids:
+        if not self.hold_trades_cache.data:
+            # We have no pairs we want to hold until profit, sell
+            return False
+
+        trade_ids: dict = self.hold_trades_cache.data.get("trade_ids")
+        if trade_ids:
+            if trade.id not in trade_ids:
                 # This pair is not on the list to hold until profit, sell
-                return True
+                return False
 
-            trade_profit_ratio = self.hold_trade_ids[trade.id]
+            trade_profit_ratio = trade_ids[trade.id]
             current_profit_ratio = trade.calc_profit_ratio(rate)
             if sell_reason == "force_sell":
                 formatted_profit_ratio = "{}%".format(trade_profit_ratio * 100)
@@ -4018,22 +3978,44 @@ class NostalgiaForInfinityNext(IStrategy):
                     "Force selling %s even though the current profit of %s < %s",
                     trade, formatted_current_profit_ratio, formatted_profit_ratio
                 )
-                return True
+                return False
             elif current_profit_ratio >= trade_profit_ratio:
                 # This pair is on the list to hold, and we reached minimum profit, sell
-                return True
+                return False
 
             # This pair is on the list to hold, and we haven't reached minimum profit, hold
-            return False
-        else:
             return True
+
+        trade_pairs: dict = self.hold_trades_cache.data.get("trade_pairs")
+        if trade_pairs:
+            if trade.pair not in trade_pairs:
+                # This pair is not on the list to hold until profit, sell
+                return False
+
+            trade_profit_ratio = trade_pairs[trade.pair]
+            current_profit_ratio = trade.calc_profit_ratio(rate)
+            if sell_reason == "force_sell":
+                formatted_profit_ratio = "{}%".format(trade_profit_ratio * 100)
+                formatted_current_profit_ratio = "{}%".format(current_profit_ratio * 100)
+                log.warning(
+                    "Force selling %s even though the current profit of %s < %s",
+                    trade, formatted_current_profit_ratio, formatted_profit_ratio
+                )
+                return False
+            elif current_profit_ratio >= trade_profit_ratio:
+                # This pair is on the list to hold, and we reached minimum profit, sell
+                return False
+
+            # This pair is on the list to hold, and we haven't reached minimum profit, hold
+            return True
+        # By default, no hold should be done
+        return False
 
 # Elliot Wave Oscillator
 def ewo(dataframe, sma1_length=5, sma2_length=35):
-    df = dataframe.copy()
-    sma1 = ta.EMA(df, timeperiod=sma1_length)
-    sma2 = ta.EMA(df, timeperiod=sma2_length)
-    smadif = (sma1 - sma2) / df['close'] * 100
+    sma1 = ta.EMA(dataframe, timeperiod=sma1_length)
+    sma2 = ta.EMA(dataframe, timeperiod=sma2_length)
+    smadif = (sma1 - sma2) / dataframe['close'] * 100
     return smadif
 
 
@@ -4049,41 +4031,14 @@ def chaikin_money_flow(dataframe, n=20, fillna=False) -> Series:
     Returns:
         pandas.Series: New feature generated.
     """
-    df = dataframe.copy()
-    mfv = ((df['close'] - df['low']) - (df['high'] - df['close'])) / (df['high'] - df['low'])
+    mfv = ((dataframe['close'] - dataframe['low']) - (dataframe['high'] - dataframe['close'])) / (dataframe['high'] - dataframe['low'])
     mfv = mfv.fillna(0.0)  # float division by zero
-    mfv *= df['volume']
+    mfv *= dataframe['volume']
     cmf = (mfv.rolling(n, min_periods=0).sum()
-           / df['volume'].rolling(n, min_periods=0).sum())
+           / dataframe['volume'].rolling(n, min_periods=0).sum())
     if fillna:
         cmf = cmf.replace([np.inf, -np.inf], np.nan).fillna(0)
     return Series(cmf, name='cmf')
-
-
-def tsi(dataframe: DataFrame, window_slow: int, window_fast: int, fillna=False) -> Series:
-    """
-    Indicator: True Strength Index (TSI)
-    :param dataframe: DataFrame The original OHLC dataframe
-    :param window_slow: slow smoothing period
-    :param window_fast: fast smoothing period
-    :param fillna: If True fill NaN values
-    """
-    df = dataframe.copy()
-
-    min_periods_slow = 0 if fillna else window_slow
-    min_periods_fast = 0 if fillna else window_fast
-
-    close_diff            = df['close'].diff()
-    close_diff_abs        = close_diff.abs()
-    smooth_close_diff     = close_diff.ewm(span=window_slow, min_periods=min_periods_slow, adjust=False).mean().ewm(span=window_fast, min_periods=min_periods_fast, adjust=False).mean()
-    smooth_close_diff_abs = close_diff_abs.ewm(span=window_slow, min_periods=min_periods_slow, adjust=False).mean().ewm(span=window_fast, min_periods=min_periods_fast, adjust=False).mean()
-
-    tsi = smooth_close_diff / smooth_close_diff_abs * 100
-
-    if fillna:
-        tsi = tsi.replace([np.inf, -np.inf], np.nan).fillna(0)
-
-    return tsi
 
 
 # Williams %R
@@ -4101,7 +4056,7 @@ def williams_r(dataframe: DataFrame, period: int = 14) -> Series:
     WR = Series(
         (highest_high - dataframe["close"]) / (highest_high - lowest_low),
         name="{0} Williams %R".format(period),
-    )
+        )
 
     return WR * -100
 
@@ -4154,3 +4109,339 @@ def hull(dataframe, timeperiod):
         return  ta.WMA(
             2 * ta.WMA(dataframe['close'], int(math.floor(timeperiod/2))) - ta.WMA(dataframe['close'], timeperiod), int(round(np.sqrt(timeperiod)))
         )
+
+
+# PMAX
+def pmax(df, period, multiplier, length, MAtype, src):
+
+    period = int(period)
+    multiplier = int(multiplier)
+    length = int(length)
+    MAtype = int(MAtype)
+    src = int(src)
+
+    mavalue = 'MA_' + str(MAtype) + '_' + str(length)
+    atr = 'ATR_' + str(period)
+    pm = 'pm_' + str(period) + '_' + str(multiplier) + '_' + str(length) + '_' + str(MAtype)
+    pmx = 'pmX_' + str(period) + '_' + str(multiplier) + '_' + str(length) + '_' + str(MAtype)
+
+    # MAtype==1 --> EMA
+    # MAtype==2 --> DEMA
+    # MAtype==3 --> T3
+    # MAtype==4 --> SMA
+    # MAtype==5 --> VIDYA
+    # MAtype==6 --> TEMA
+    # MAtype==7 --> WMA
+    # MAtype==8 --> VWMA
+    # MAtype==9 --> zema
+    if src == 1:
+        masrc = df["close"]
+    elif src == 2:
+        masrc = (df["high"] + df["low"]) / 2
+    elif src == 3:
+        masrc = (df["high"] + df["low"] + df["close"] + df["open"]) / 4
+
+    if MAtype == 1:
+        mavalue = ta.EMA(masrc, timeperiod=length)
+    elif MAtype == 2:
+        mavalue = ta.DEMA(masrc, timeperiod=length)
+    elif MAtype == 3:
+        mavalue = ta.T3(masrc, timeperiod=length)
+    elif MAtype == 4:
+        mavalue = ta.SMA(masrc, timeperiod=length)
+    elif MAtype == 5:
+        mavalue = VIDYA(df, length=length)
+    elif MAtype == 6:
+        mavalue = ta.TEMA(masrc, timeperiod=length)
+    elif MAtype == 7:
+        mavalue = ta.WMA(df, timeperiod=length)
+    elif MAtype == 8:
+        mavalue = vwma(df, length)
+    elif MAtype == 9:
+        mavalue = zema(df, period=length)
+
+    df[atr] = ta.ATR(df, timeperiod=period)
+    df['basic_ub'] = mavalue + ((multiplier/10) * df[atr])
+    df['basic_lb'] = mavalue - ((multiplier/10) * df[atr])
+
+
+    basic_ub = df['basic_ub'].values
+    final_ub = np.full(len(df), 0.00)
+    basic_lb = df['basic_lb'].values
+    final_lb = np.full(len(df), 0.00)
+
+    for i in range(period, len(df)):
+        final_ub[i] = basic_ub[i] if (
+            basic_ub[i] < final_ub[i - 1]
+            or mavalue[i - 1] > final_ub[i - 1]) else final_ub[i - 1]
+        final_lb[i] = basic_lb[i] if (
+            basic_lb[i] > final_lb[i - 1]
+            or mavalue[i - 1] < final_lb[i - 1]) else final_lb[i - 1]
+
+    df['final_ub'] = final_ub
+    df['final_lb'] = final_lb
+
+    pm_arr = np.full(len(df), 0.00)
+    for i in range(period, len(df)):
+        pm_arr[i] = (
+            final_ub[i] if (pm_arr[i - 1] == final_ub[i - 1]
+                                    and mavalue[i] <= final_ub[i])
+        else final_lb[i] if (
+            pm_arr[i - 1] == final_ub[i - 1]
+            and mavalue[i] > final_ub[i]) else final_lb[i]
+        if (pm_arr[i - 1] == final_lb[i - 1]
+            and mavalue[i] >= final_lb[i]) else final_ub[i]
+        if (pm_arr[i - 1] == final_lb[i - 1]
+            and mavalue[i] < final_lb[i]) else 0.00)
+
+    pm = Series(pm_arr)
+
+    # Mark the trend direction up/down
+    pmx = np.where((pm_arr > 0.00), np.where((mavalue < pm_arr), 'down',  'up'), np.NaN)
+
+    return pm, pmx
+
+
+def calc_streaks(series: Series):
+    # logic tables
+    geq = series >= series.shift(1)  # True if rising
+    eq = series == series.shift(1)  # True if equal
+    logic_table = concat([geq, eq], axis=1)
+
+    streaks = [0]  # holds the streak duration, starts with 0
+
+    for row in logic_table.iloc[1:].itertuples():  # iterate through logic table
+        if row[2]:  # same value as before
+            streaks.append(0)
+            continue
+        last_value = streaks[-1]
+        if row[1]:  # higher value than before
+            streaks.append(last_value + 1 if last_value >=
+                                             0 else 1)  # increase or reset to +1
+        else:  # lower value than before
+            streaks.append(last_value - 1 if last_value <
+                                             0 else -1)  # decrease or reset to -1
+
+    return streaks
+
+# SSL Channels
+def SSLChannels(dataframe, length = 7):
+    df = dataframe.copy()
+    ATR = ta.ATR(dataframe, timeperiod=14)
+    smaHigh = dataframe['high'].rolling(length).mean() + ATR
+    smaLow = dataframe['low'].rolling(length).mean() - ATR
+    hlv = Series(np.where(dataframe['close'] > smaHigh, 1, np.where(dataframe['close'] < smaLow, -1, np.NAN)))
+    hlv = hlv.ffill()
+    sslDown = np.where(hlv < 0, smaHigh, smaLow)
+    sslUp = np.where(hlv < 0, smaLow, smaHigh)
+    return sslDown, sslUp
+
+
+class Cache:
+
+    def __init__(self, path):
+        self.path = path
+        self.data = {}
+        self._mtime = None
+        self._previous_data = {}
+        try:
+            self.load()
+        except FileNotFoundError:
+            pass
+
+    @staticmethod
+    def rapidjson_load_kwargs():
+        return {"number_mode": rapidjson.NM_NATIVE}
+
+    @staticmethod
+    def rapidjson_dump_kwargs():
+        return {"number_mode": rapidjson.NM_NATIVE}
+
+    def load(self):
+        if not self._mtime or self.path.stat().st_mtime_ns != self._mtime:
+            self._load()
+
+    def save(self):
+        if self.data != self._previous_data:
+            self._save()
+
+    def process_loaded_data(self, data):
+        return data
+
+    def _load(self):
+        # This method only exists to simplify unit testing
+        with self.path.open("r") as rfh:
+            try:
+                data = rapidjson.load(
+                    rfh,
+                    **self.rapidjson_load_kwargs()
+                )
+            except rapidjson.JSONDecodeError as exc:
+                log.error("Failed to load JSON from %s: %s", self.path, exc)
+            else:
+                self.data = self.process_loaded_data(data)
+                self._previous_data = copy.deepcopy(self.data)
+                self._mtime = self.path.stat().st_mtime_ns
+
+    def _save(self):
+        # This method only exists to simplify unit testing
+        rapidjson.dump(
+            self.data,
+            self.path.open("w"),
+            **self.rapidjson_dump_kwargs()
+        )
+        self._mtime = self.path.stat().st_mtime
+        self._previous_data = copy.deepcopy(self.data)
+
+
+class HoldsCache(Cache):
+
+    @staticmethod
+    def rapidjson_load_kwargs():
+        return {
+            "number_mode": rapidjson.NM_NATIVE,
+            "object_hook": HoldsCache._object_hook,
+        }
+
+    @staticmethod
+    def rapidjson_dump_kwargs():
+        return {
+            "number_mode": rapidjson.NM_NATIVE,
+            "mapping_mode": rapidjson.MM_COERCE_KEYS_TO_STRINGS,
+        }
+
+    def save(self):
+        raise RuntimeError("The holds cache does not allow programatical save")
+
+    def process_loaded_data(self, data):
+        trade_ids = data.get("trade_ids")
+        trade_pairs = data.get("trade_pairs")
+
+        if not trade_ids and not trade_pairs:
+            return data
+
+        open_trades = {}
+        for trade in Trade.get_trades_proxy(is_open=True):
+            open_trades[trade.id] = open_trades[trade.pair] = trade
+
+        r_trade_ids = {}
+        if trade_ids:
+            if isinstance(trade_ids, dict):
+                # New syntax
+                for trade_id, profit_ratio in trade_ids.items():
+                    if not isinstance(trade_id, int):
+                        log.error(
+                            "The trade_id(%s) defined under 'trade_ids' in %s is not an integer",
+                            trade_id, self.path
+                        )
+                        continue
+                    if not isinstance(profit_ratio, float):
+                        log.error(
+                            "The 'profit_ratio' config value(%s) for trade_id %s in %s is not a float",
+                            profit_ratio,
+                            trade_id,
+                            self.path
+                        )
+                    if trade_id in open_trades:
+                        formatted_profit_ratio = "{}%".format(profit_ratio * 100)
+                        log.warning(
+                            "The trade %s is configured to HOLD until the profit ratio of %s is met",
+                            open_trades[trade_id],
+                            formatted_profit_ratio
+                        )
+                        r_trade_ids[trade_id] = profit_ratio
+                    else:
+                        log.warning(
+                            "The trade_id(%s) is no longer open. Please remove it from 'trade_ids' in %s",
+                            trade_id,
+                            self.path
+                        )
+            else:
+                # Initial Syntax
+                profit_ratio = data.get("profit_ratio")
+                if profit_ratio:
+                    if not isinstance(profit_ratio, float):
+                        log.error(
+                            "The 'profit_ratio' config value(%s) in %s is not a float",
+                            profit_ratio,
+                            self.path
+                        )
+                else:
+                    profit_ratio = 0.005
+                formatted_profit_ratio = "{}%".format(profit_ratio * 100)
+                for trade_id in trade_ids:
+                    if not isinstance(trade_id, int):
+                        log.error(
+                            "The trade_id(%s) defined under 'trade_ids' in %s is not an integer",
+                            trade_id, self.path
+                        )
+                        continue
+                    if trade_id in open_trades:
+                        log.warning(
+                            "The trade %s is configured to HOLD until the profit ratio of %s is met",
+                            open_trades[trade_id],
+                            formatted_profit_ratio
+                        )
+                        r_trade_ids[trade_id] = profit_ratio
+                    else:
+                        log.warning(
+                            "The trade_id(%s) is no longer open. Please remove it from 'trade_ids' in %s",
+                            trade_id,
+                            self.path
+                        )
+
+        r_trade_pairs = {}
+        if trade_pairs:
+            for trade_pair, profit_ratio in trade_pairs.items():
+                if not isinstance(trade_pair, str):
+                    log.error(
+                        "The trade_pair(%s) defined under 'trade_pairs' in %s is not a string",
+                        trade_pair, self.path
+                    )
+                    continue
+                if "/" not in trade_pair:
+                    log.error(
+                        "The trade_pair(%s) defined under 'trade_pairs' in %s does not look like "
+                        "a valid '<TOKEN_NAME>/<STAKE_CURRENCY>' formatted pair.",
+                        trade_pair, self.path
+                    )
+                    continue
+                if not isinstance(profit_ratio, float):
+                    log.error(
+                        "The 'profit_ratio' config value(%s) for trade_pair %s in %s is not a float",
+                        profit_ratio,
+                        trade_pair,
+                        self.path
+                    )
+                formatted_profit_ratio = "{}%".format(profit_ratio * 100)
+                if trade_pair in open_trades:
+                    log.warning(
+                        "The trade %s is configured to HOLD until the profit ratio of %s is met",
+                        open_trades[trade_pair],
+                        formatted_profit_ratio
+                    )
+                else:
+                    log.warning(
+                        "The trade pair %s is configured to HOLD until the profit ratio of %s is met",
+                        trade_pair,
+                        formatted_profit_ratio
+                    )
+                r_trade_pairs[trade_pair] = profit_ratio
+
+        r_data = {}
+        if r_trade_ids:
+            r_data["trade_ids"] = r_trade_ids
+        if r_trade_pairs:
+            r_data["trade_pairs"] = r_trade_pairs
+        return r_data
+
+    @staticmethod
+    def _object_hook(data):
+        _data = {}
+        for key, value in data.items():
+            try:
+                key = int(key)
+            except ValueError:
+                pass
+            _data[key] = value
+        return _data

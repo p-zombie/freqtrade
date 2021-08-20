@@ -27,13 +27,12 @@ list-strats: # list strategies
 
 data: # download data
 	docker compose run --rm freqtrade \
-		freqtrade download-data --config test.json  --timerange $(TIMERANGE)  -t $(TIMEFRAME)
+		freqtrade download-data --config test.json  --timerange $(TIMERANGE)  -t 5m 1h
 
-test: # run backtest
+test: data # run backtest
 	docker compose run --rm freqtrade \
 		freqtrade backtesting --config test.json --strategy-list $(STRATEGY) --timeframe $(TIMEFRAME) --timerange=$(TIMERANGE) \
 		--export=trades
-	osascript -e 'display notification "Done"'
 
 test-all: data # run backtest on all strats
 	docker compose run --rm freqtrade \
@@ -43,9 +42,9 @@ gym: # run rl env
 	docker compose run --rm freqtrade \
 		python /freqtrade/user_data/freqgym.py
 
-hyperopt: # run hyper opt
+hyperopt: data # run hyper opt
 	docker compose run --rm freqtrade \
-		freqtrade hyperopt --config test.json --hyperopt-loss $(LOSS) --spaces $(SPACES) --strategy $(STRATEGY) -e $(EPOCHS) --timerange=$(TIMERANGE) --timeframe=$(TIMEFRAME) --random-state 42 -j -1
+		freqtrade hyperopt --config hyper.json --hyperopt-loss $(LOSS) --spaces $(SPACES) --strategy $(STRATEGY) -e $(EPOCHS) --timerange=$(TIMERANGE) --timeframe=$(TIMEFRAME) --random-state 42 -j -1
 
 stop: # stop containers
 	docker compose stop
