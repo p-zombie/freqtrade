@@ -117,23 +117,19 @@ class EnsembleStrategy(IStrategy):
         return strategy
 
     def populate_indicators(self, dataframe: DataFrame, metadata: dict) -> DataFrame:
-        strategies = STRATEGIES
-        for strategy_name in strategies:
-            strategy = self.get_strategy(strategy_name)
-            strategy_indicators = strategy.advise_indicators(dataframe, metadata)
-            dataframe[f"buy_signal_{strategy_name}"] = strategy.advise_buy(
-                strategy_indicators, metadata
-            )["buy"]
-
-        buy_strategies = STRAT_COMBINATIONS[self.buy_strategies.value]
-        buy_strategies = [f"buy_signal_{name}" for name in buy_strategies]
-
-        dataframe["buy_mean"] = dataframe[buy_strategies].fillna(0).mean(axis=1)
         return dataframe
 
     def populate_buy_trend(self, dataframe: DataFrame, metadata: dict) -> DataFrame:
-        dataframe["buy"] = (
-            dataframe["buy_mean"] > self.buy_action_diff_threshold.value
+        strategies = STRAT_COMBINATIONS[self.buy_strategies.value]
+        for strategy_name in strategies:
+            strategy = self.get_strategy(strategy_name)
+            strategy_indicators = strategy.advise_indicators(dataframe, metadata)
+            dataframe[f"strat_buy_signal_{strategy_name}"] = strategy.advise_buy(
+                strategy_indicators, metadata
+            )["buy"]
+        
+        dataframe['buy'] = (
+            dataframe.filter(like='strat_buy_signal_').mean(axis=1) > self.buy_action_diff_threshold.value
         ).astype(int)
         return dataframe
 

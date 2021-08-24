@@ -3,7 +3,7 @@
     "db_url": "$LIVE_DATABASE_URL",
     "dry_run": false,
     "timeframe": "5m",
-    "max_open_trades": 20,
+    "max_open_trades": 5,
     "stake_currency": "USDT",
     "stake_amount": "unlimited",
     "tradable_balance_ratio": 0.5,

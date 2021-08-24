@@ -29,7 +29,7 @@ data: # download data
 	docker compose run --rm freqtrade \
 		freqtrade download-data --config test.json  --timerange $(TIMERANGE)  -t 5m 1h
 
-test: data # run backtest
+test: #data # run backtest
 	docker compose run --rm freqtrade \
 		freqtrade backtesting --config test.json --strategy-list $(STRATEGY) --timeframe $(TIMEFRAME) --timerange=$(TIMERANGE) \
 		--export=trades
