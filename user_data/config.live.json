@@ -1,5 +1,5 @@
 {
-    "strategy": "EnsembleStrategy",
+    "strategy": "NostalgiaForInfinityNext",
     "db_url": "$LIVE_DATABASE_URL",
     "dry_run": false,
     "timeframe": "5m",
