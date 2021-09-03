@@ -2,7 +2,7 @@
 version: '3'
 services:
   live:
-    image: joaoraf/freqtrade
+    image: joaoraf/freqtrade:master
     env_file: 
       - .env
     restart: unless-stopped
@@ -12,7 +12,7 @@ services:
       freqtrade trade -c live.json
 
   dry:
-    image: joaoraf/freqtrade
+    image: joaoraf/freqtrade:master
     env_file: 
       - .env
     restart: unless-stopped
