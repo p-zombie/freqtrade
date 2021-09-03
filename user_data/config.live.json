@@ -1,6 +1,6 @@
 {
     "strategy": "NostalgiaForInfinityNext",
-    "db_url": "$LIVE_DATABASE_URL",
+    "db_url": "sqlite:////freqtrade/user_data/nfi.live.sqlite",
     "dry_run": false,
     "timeframe": "5m",
     "max_open_trades": 6,
@@ -30,7 +30,7 @@
         "order_book_max": 1
     },
     "exchange": {
-        "name": "$EXCHANGE_NAME",
+        "name": "binance",
         "key": "$EXCHANGE_KEY",
         "secret": "$EXCHANGE_SECRET",
         "ccxt_config": {"enableRateLimit": true},
@@ -99,9 +99,9 @@
         "chat_id": "$TELEGRAM_CHAT_ID_LIVE"
     },
     "api_server": {
-        "enabled": true,
+        "enabled": false,
         "listen_ip_address": "0.0.0.0",
-        "listen_port": $PORT,
+        "listen_port": 8080,
         "verbosity": "error",
         "enable_openapi": false,
         "jwt_secret_key": "$SECURE_KEY",

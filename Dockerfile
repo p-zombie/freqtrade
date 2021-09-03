@@ -17,10 +17,6 @@ RUN jupyter labextension install @jupyter-widgets/jupyterlab-manager plotlywidge
 COPY requirements.txt /freqtrade/requirements.txt
 RUN --mount=type=cache,mode=0755,target=/home/ftuser/.cache pip install -r /freqtrade/requirements.txt
 
-COPY requirements-rl.txt /freqtrade/requirements-rl.txt
-RUN --mount=type=cache,mode=0755,target=/home/ftuser/.cache pip install -r /freqtrade/requirements-rl.txt
-RUN --mount=type=cache,mode=0755,target=/home/ftuser/.cache pip install numpy==1.20.0
-
 COPY load_env.sh /freqtrade/load_env.sh
 COPY Procfile /freqtrade/Procfile
 COPY user_data /freqtrade/user_data
