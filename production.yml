@@ -7,7 +7,7 @@ services:
       - .env
     restart: unless-stopped
     volumes:
-      - "./db:/freqtrade/db"
+      - "./db:/freqtrade/user_data/db"
     command: >
       freqtrade trade -c live.json
 
@@ -17,6 +17,6 @@ services:
       - .env
     restart: unless-stopped
     volumes:
-      - "./db:/freqtrade/db"
+      - "./db:/freqtrade/user_data/db"
     command: >
       freqtrade trade -c dry.json

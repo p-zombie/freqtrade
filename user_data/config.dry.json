@@ -1,6 +1,6 @@
 {
     "strategy": "NostalgiaForInfinityNext",
-    "db_url": "sqlite:////freqtrade/db/nfi.dry.sqlite",
+    "db_url": "sqlite:////freqtrade/user_data/db/nfi.dry.sqlite",
     "dry_run": true,
     "dry_run_wallet": 10000,
     "max_open_trades": 5,
