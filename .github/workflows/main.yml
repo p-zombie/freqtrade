@@ -25,4 +25,4 @@ jobs:
         stack_file_name: production.yml
         pull_images_first: true
         keep_files: 3
-        args: up -d --env-file /root/.env
+        args: up -d --env-file /root/freqtrade/.env
