@@ -33,23 +33,16 @@ jobs:
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
 
-  deploy:
-    runs-on: ubuntu-latest
-    steps:
-    - uses: actions/checkout@v1
-      with:
-        fetch-depth: 1
-
-    - name: Start Deployment
-      uses: wshihadeh/docker-deployment-action@master
-      with:
-        remote_docker_host: ${{ secrets.DOCKER_HOST }}
-        ssh_private_key: ${{ secrets.DOCKER_SSH_PRIVATE_KEY }}
-        ssh_public_key: ${{ secrets.DOCKER_SSH_PUBLIC_KEY }}
-        deployment_mode: docker-compose
-        copy_stack_file: true
-        deploy_path: /root/freqtrade
-        stack_file_name: production.yml
-        pull_images_first: true
-        keep_files: 3
-        args: up -d
+      - name: Start Deployment
+        uses: wshihadeh/docker-deployment-action@master
+        with:
+          remote_docker_host: ${{ secrets.DOCKER_HOST }}
+          ssh_private_key: ${{ secrets.DOCKER_SSH_PRIVATE_KEY }}
+          ssh_public_key: ${{ secrets.DOCKER_SSH_PUBLIC_KEY }}
+          deployment_mode: docker-compose
+          copy_stack_file: true
+          deploy_path: /root/freqtrade
+          stack_file_name: production.yml
+          pull_images_first: true
+          keep_files: 3
+          args: up -d
