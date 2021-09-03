@@ -5,6 +5,8 @@ ENV PYTHONWARNINGS="ignore"
 ENV PIP_CACHE_DIR="/home/ftuser/.cache"
 ENV PYTHONUSERBASE="/home/ftuser/.local"
 
+RUN mkdir /freqtrade/db
+
 USER root
 RUN curl -sL https://deb.nodesource.com/setup_12.x | sudo -E bash -
 RUN apt-get update && apt-get -y upgrade
