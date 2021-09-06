@@ -36,7 +36,7 @@
         "ccxt_config": {"enableRateLimit": true},
         "ccxt_async_config": {
             "enableRateLimit": true,
-            "rateLimit": 700
+            "rateLimit": 150
         },
         "pair_whitelist": [
         ],
