@@ -896,8 +896,8 @@ class NostalgiaForInfinityNext(IStrategy):
         28: {
             "ema_fast"                  : False,
             "ema_fast_len"              : "50",
-            "ema_slow"                  : False,
-            "ema_slow_len"              : "100",
+            "ema_slow"                  : True,
+            "ema_slow_len"              : "12",
             "close_above_ema_fast"      : False,
             "close_above_ema_fast_len"  : "50",
             "close_above_ema_slow"      : False,
@@ -909,13 +909,13 @@ class NostalgiaForInfinityNext(IStrategy):
             "safe_dips"                 : True,
             "safe_dips_type"            : "130",
             "safe_pump"                 : True,
-            "safe_pump_type"            : "110",
+            "safe_pump_type"            : "120",
             "safe_pump_period"          : "36",
-            "btc_1h_not_downtrend"      : True,
+            "btc_1h_not_downtrend"      : False,
             "close_over_pivot_type"     : "none", # pivot, sup1, sup2, sup3, res1, res2, res3
-            "close_over_pivot_offset"   : 1.0,
-            "close_under_pivot_type"    : "none", # pivot, sup1, sup2, sup3, res1, res2, res3
-            "close_under_pivot_offset"  : 1.0
+            "close_over_pivot_offset"   : 0.99,
+            "close_under_pivot_type"    : "res3", # pivot, sup1, sup2, sup3, res1, res2, res3
+            "close_under_pivot_offset"  : 1.32
         },
         29: {
             "ema_fast"                  : False,
@@ -1775,11 +1775,12 @@ class NostalgiaForInfinityNext(IStrategy):
     buy_27_rsi_max = 46.0
     buy_27_volume = 2.0
 
-    buy_28_ma_offset = 0.984
-    buy_28_ewo = 7.2
-    buy_28_rsi = 32.2
-    buy_28_cti = -0.9
-    buy_28_cti_1h = 0.95
+    buy_28_ma_offset = 0.928
+    buy_28_ewo_min = 2.0
+    buy_28_rsi_max = 33.4
+    buy_28_cti_max = -0.84
+    buy_28_r_14_max = -97.0
+    buy_28_cti_1h_max = 0.95
 
     buy_29_ma_offset = 0.984
     buy_29_ewo_max = -4.2
@@ -4758,10 +4759,12 @@ class NostalgiaForInfinityNext(IStrategy):
                     # Logic
                     item_buy_logic.append(dataframe['moderi_64'] == True)
                     item_buy_logic.append(dataframe['close'] < dataframe['hull_75'] * self.buy_28_ma_offset)
-                    item_buy_logic.append(dataframe['ewo'] > self.buy_28_ewo)
-                    item_buy_logic.append(dataframe['rsi_14'] < self.buy_28_rsi)
-                    item_buy_logic.append(dataframe['cti'] < self.buy_28_cti)
-                    item_buy_logic.append(dataframe['cti_1h'] < self.buy_28_cti_1h)
+                    item_buy_logic.append(dataframe['ewo_sma'] > self.buy_28_ewo_min)
+                    item_buy_logic.append(dataframe['rsi_14'] < self.buy_28_rsi_max)
+                    item_buy_logic.append(dataframe['cti'] < self.buy_28_cti_max)
+                    item_buy_logic.append(dataframe['cti'].shift(1) < self.buy_28_cti_max)
+                    item_buy_logic.append(dataframe['r_14'] < self.buy_28_r_14_max)
+                    item_buy_logic.append(dataframe['cti_1h'] < self.buy_28_cti_1h_max)
 
                 # Condition #29
                 elif index == 29:
