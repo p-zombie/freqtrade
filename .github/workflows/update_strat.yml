@@ -7,6 +7,9 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v2
+        with:
+          token: ${{ secrets.GH_PAT }}
+
       - name: Fetch release version
         run: |
           curl -O https://raw.githubusercontent.com/iterativv/NostalgiaForInfinity/main/NostalgiaForInfinityNext.py && \
