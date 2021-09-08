@@ -1,0 +1,23 @@
+name: Get latest release version
+on:
+  schedule:
+    - cron:  '0 * * * *'
+jobs:
+  get-version:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v2
+      - name: Fetch release version
+        run: |
+          curl -O https://raw.githubusercontent.com/iterativv/NostalgiaForInfinity/main/NostalgiaForInfinityNext.py && \
+          mv NostalgiaForInfinityNext.py user_data/strategies/NostalgiaForInfinityNext.py
+      - name: Check for modified files
+        id: git-check
+        run: echo ::set-output name=modified::$([ -z "`git status --porcelain`" ] && echo "false" || echo "true")
+      - name: Commit latest release version
+        if: steps.git-check.outputs.modified == 'true'
+        run: |
+          git config --global user.name 'joaorafaelm'
+          git config --global user.email 'joaoraf@me.com'
+          git commit -am "New release version"
+          git push
