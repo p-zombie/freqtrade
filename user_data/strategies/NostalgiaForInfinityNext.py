@@ -355,7 +355,7 @@ class NostalgiaForInfinityNext(IStrategy):
             "sma200_1h_rising"          : False,
             "sma200_1h_rising_val"      : "50",
             "safe_dips"                 : True,
-            "safe_dips_type"            : "130",
+            "safe_dips_type"            : "70",
             "safe_pump"                 : True,
             "safe_pump_type"            : "120",
             "safe_pump_period"          : "36",
