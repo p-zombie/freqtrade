@@ -355,9 +355,9 @@ class NostalgiaForInfinityNext(IStrategy):
             "sma200_1h_rising"          : False,
             "sma200_1h_rising_val"      : "50",
             "safe_dips"                 : True,
-            "safe_dips_type"            : "70",
+            "safe_dips_type"            : "130",
             "safe_pump"                 : True,
-            "safe_pump_type"            : "80",
+            "safe_pump_type"            : "120",
             "safe_pump_period"          : "36",
             "btc_1h_not_downtrend"      : False,
             "close_over_pivot_type"     : "none", # pivot, sup1, sup2, sup3, res1, res2, res3
@@ -1633,11 +1633,14 @@ class NostalgiaForInfinityNext(IStrategy):
     buy_cti_4 = -0.8
 
     buy_5_ema_rel = 0.84
-    buy_5_ema_open_mult = 0.018
-    buy_5_bb_offset = 0.996
-    buy_5_cti = -0.82
-    buy_5_crsi_1h = 24.0
-    buy_5_volume = 1.8
+    buy_5_ema_open_mult = 0.02
+    buy_5_bb_offset = 0.998
+    buy_5_cti_max = -0.5
+    buy_5_r_14_max = -94.0
+    buy_5_rsi_14_min = 25.0
+    buy_5_mfi_min = 18.0
+    buy_5_crsi_1h_min = 12.0
+    buy_5_volume = 1.6
 
     buy_6_ema_open_mult = 0.019
     buy_6_bb_offset = 0.984
@@ -3158,6 +3161,12 @@ class NostalgiaForInfinityNext(IStrategy):
 
         return False, None
 
+    def sell_stoploss_extra(self, current_profit: float, max_profit: float, max_loss: float, last_candle, previous_candle_1, trade: 'Trade', current_time: 'datetime') -> tuple:
+        if (current_profit < -0.0) and (last_candle['close'] < last_candle['ema_200']) and (((last_candle['ema_200'] - last_candle['close']) / last_candle['close']) < 0.004) and last_candle['rsi_14'] > previous_candle_1['rsi_14'] and (last_candle['rsi_14'] > (last_candle['rsi_14_1h'] + 18.0)) and (last_candle['sma_200_dec_24']) & (current_time - timedelta(minutes=720) > trade.open_date_utc):
+                return True, 'signal_stoploss_u_e_1'
+
+        return False, None
+
     def sell_pump_dec(self, current_profit: float, last_candle) -> tuple:
         if (0.03 > current_profit >= 0.005) and (last_candle['sell_pump_48_1_1h']) and (last_candle['sma_200_dec_20']) and (last_candle['close'] < last_candle['ema_200']):
             return True, 'signal_profit_p_d_1'
@@ -3530,6 +3539,14 @@ class NostalgiaForInfinityNext(IStrategy):
 
         elif (0.02 < current_profit <= 0.06) and (max_profit - current_profit > 0.04) and (last_candle['cmf'] < 0.0) and (last_candle['sma_200_dec_24']):
             return True, 'sell_long_t_1'
+        elif (0.06 < current_profit <= 0.12) and (max_profit - current_profit > 0.06) and (last_candle['cmf'] < 0.0):
+            return True, 'sell_long_t_2'
+        elif (0.12 < current_profit <= 0.24) and (max_profit - current_profit > 0.08) and (last_candle['cmf'] < 0.0):
+            return True, 'sell_long_t_3'
+        elif (0.24 < current_profit <= 0.5) and (max_profit - current_profit > 0.09) and (last_candle['cmf'] < 0.0):
+            return True, 'sell_long_t_4'
+        elif (0.5 < current_profit <= 0.9) and (max_profit - current_profit > 0.1) and (last_candle['cmf'] < 0.0):
+            return True, 'sell_long_t_5'
 
         elif (0.03 < current_profit <= 0.06) and (current_time - timedelta(minutes=720) > trade.open_date_utc) and (last_candle['r_480'] > -20.0):
             return True, 'sell_long_l_1'
@@ -3692,6 +3709,11 @@ class NostalgiaForInfinityNext(IStrategy):
         sell, signal_name = self.sell_stoploss(current_profit, last_candle, previous_candle_1, trade, current_time)
         if sell and (signal_name is not None):
             return f"{signal_name} ( {buy_tag} )"
+
+        if all(c in ['0'] for c in buy_tags):
+            sell, signal_name = self.sell_stoploss_extra(current_profit, max_profit, max_loss, last_candle, previous_candle_1, trade, current_time)
+            if sell and (signal_name is not None):
+                return f"{signal_name} ( {buy_tag} )"
 
         # Pumped descending pairs
         sell, signal_name = self.sell_pump_dec(current_profit, last_candle)
@@ -4199,6 +4221,12 @@ class NostalgiaForInfinityNext(IStrategy):
         # CCI
         dataframe['cci'] = ta.CCI(dataframe, source='hlc3', timeperiod=20)
 
+        # CCI Oscillator
+        cci_36 = ta.CCI(dataframe, timeperiod=36)
+        cci_36_max = cci_36.max()
+        cci_36_min = cci_36.min()
+        dataframe['cci_36_osc'] = (cci_36 / cci_36_max).where(cci_36 > 0, -cci_36 / cci_36_min)
+
         # ATR
         dataframe['atr'] = ta.ATR(dataframe, timeperiod=14)
         dataframe['atr_high_thresh_1'] = (dataframe['high'] - (dataframe['atr'] * 5.4))
@@ -4469,8 +4497,12 @@ class NostalgiaForInfinityNext(IStrategy):
                     item_buy_logic.append((dataframe['ema_26'] - dataframe['ema_12']) > (dataframe['open'] * self.buy_5_ema_open_mult))
                     item_buy_logic.append((dataframe['ema_26'].shift() - dataframe['ema_12'].shift()) > (dataframe['open'] / 100))
                     item_buy_logic.append(dataframe['close'] < (dataframe['bb20_2_low'] * self.buy_5_bb_offset))
-                    item_buy_logic.append(dataframe['cti'] < self.buy_5_cti)
-                    item_buy_logic.append(dataframe['crsi_1h'] > self.buy_5_crsi_1h)
+                    item_buy_logic.append(dataframe['cti'] < self.buy_5_cti_max)
+                    item_buy_logic.append(dataframe['rsi_14'] > self.buy_5_rsi_14_min)
+                    item_buy_logic.append(dataframe['mfi'] > self.buy_5_mfi_min)
+                    item_buy_logic.append(dataframe['r_14'] < self.buy_5_r_14_max)
+                    item_buy_logic.append(dataframe['r_14'].shift(1) < self.buy_5_r_14_max)
+                    item_buy_logic.append(dataframe['crsi_1h'] > self.buy_5_crsi_1h_min)
                     item_buy_logic.append(dataframe['volume'] < (dataframe['volume_mean_4'] * self.buy_5_volume))
 
                 # Condition #6
