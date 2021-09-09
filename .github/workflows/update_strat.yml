@@ -13,7 +13,9 @@ jobs:
       - name: Fetch release version
         run: |
           curl -O https://raw.githubusercontent.com/iterativv/NostalgiaForInfinity/main/NostalgiaForInfinityNext.py && \
-          mv NostalgiaForInfinityNext.py user_data/strategies/NostalgiaForInfinityNext.py
+          mv NostalgiaForInfinityNext.py user_data/strategies
+          curl -O https://raw.githubusercontent.com/iterativv/NostalgiaForInfinity/main/configs/blacklist-binance.json && \
+          mv blacklist-binance.json user_data
       - name: Check for modified files
         id: git-check
         run: echo ::set-output name=modified::$([ -z "`git status --porcelain`" ] && echo "false" || echo "true")
