@@ -19,6 +19,7 @@ from technical.indicators import zema, VIDYA, ichimoku
 import time
 
 log = logging.getLogger(__name__)
+#log.setLevel(logging.DEBUG)
 
 
 try:
@@ -137,11 +138,16 @@ class NostalgiaForInfinityNext(IStrategy):
     # Exchange Downtime protection
     has_downtime_protection = False
 
-    # Report populate_indicators loop time per pair
-    has_loop_perf_logging = False
-
     # Do you want to use the hold feature? (with hold-trades.json)
     holdSupportEnabled = True
+
+    # Traded Volume Coin ranking
+    top_traded_coins = {}
+    top_traded_coins['enabled'] = False
+    top_traded_coins['updated'] = False
+    top_traded_coins['list_length'] = 20
+    top_traded_coins['current_whitelist'] = []
+    top_traded_coins['dataframe'] = DataFrame()
 
     # Run "populate_indicators()" only for new candle.
     process_only_new_candles = True
@@ -294,22 +300,22 @@ class NostalgiaForInfinityNext(IStrategy):
             "close_under_pivot_offset"  : 1.0
         },
         3: {
-            "ema_fast"                  : True,
+            "ema_fast"                  : False,
             "ema_fast_len"              : "100",
-            "ema_slow"                  : True,
+            "ema_slow"                  : False,
             "ema_slow_len"              : "100",
             "close_above_ema_fast"      : False,
             "close_above_ema_fast_len"  : "200",
             "close_above_ema_slow"      : False,
             "close_above_ema_slow_len"  : "200",
             "sma200_rising"             : False,
-            "sma200_rising_val"         : "50",
+            "sma200_rising_val"         : "30",
             "sma200_1h_rising"          : False,
-            "sma200_1h_rising_val"      : "50",
-            "safe_dips"                 : True,
+            "sma200_1h_rising_val"      : "36",
+            "safe_dips"                 : False,
             "safe_dips_type"            : "70",
             "safe_pump"                 : True,
-            "safe_pump_type"            : "100",
+            "safe_pump_type"            : "110",
             "safe_pump_period"          : "36",
             "btc_1h_not_downtrend"      : False,
             "close_over_pivot_type"     : "none", # pivot, sup1, sup2, sup3, res1, res2, res3
@@ -1622,11 +1628,14 @@ class NostalgiaForInfinityNext(IStrategy):
     buy_2_r_480_1h_max = -10.0
     buy_2_volume = 2.0
 
-    buy_bb40_bbdelta_close_3 = 0.045
-    buy_bb40_closedelta_close_3 = 0.023
-    buy_bb40_tail_bbdelta_3 = 0.418
-    buy_ema_rel_3 = 0.986
-    buy_cti_3 = -0.5
+    buy_3_bb40_bbdelta_close = 0.057
+    buy_3_bb40_closedelta_close = 0.023
+    buy_3_bb40_tail_bbdelta = 0.418
+    buy_3_cti_max = -0.5
+    buy_3_cci_36_osc_min = -0.25
+    buy_3_crsi_1h_min = 20.0
+    buy_3_r_480_1h_min = -48.0
+    buy_3_cti_1h_max = 0.82
 
     buy_bb20_close_bblowerband_4 = 0.979
     buy_bb20_volume_4 = 10.0
@@ -2295,6 +2304,74 @@ class NostalgiaForInfinityNext(IStrategy):
         if self.hold_trades_cache:
             self.hold_trades_cache.load()
 
+    def dynamic_volume_list(self):
+
+        if sorted(self.top_traded_coins['current_whitelist']) != sorted(self.dp.current_whitelist()):
+            log.info("Whitelist has changed...")
+            self.top_traded_coins['updated'] = False
+
+        if self.top_traded_coins['updated'] == False:
+            log.info("Updating top traded pairlist...")
+            tik = time.perf_counter()
+
+            self.top_traded_coins['dataframe'] = DataFrame()
+
+            # Update pairlist
+            self.top_traded_coins['current_whitelist'] = self.dp.current_whitelist()
+
+            # Move up BTC for largest data footprint
+            self.top_traded_coins['current_whitelist'].insert(0, self.top_traded_coins['current_whitelist'].pop(self.top_traded_coins['current_whitelist'].index(f"BTC/{self.config['stake_currency']}")))
+
+            # Build traded volume dataframe
+            for coin_pair in self.top_traded_coins['current_whitelist']:
+                coin = coin_pair.split('/')[0]
+
+                # Get the volume for the daily informative timeframe and name the column for the coin
+                pair_dataframe = self.dp.get_pair_dataframe(pair=coin_pair, timeframe=self.info_timeframe_1d)
+                pair_dataframe.set_index('date')
+
+                if self.config['runmode'].value in ('live', 'dry_run'):
+                    pair_dataframe = pair_dataframe.iloc[-7:,:]
+
+                # Set the date index of the self.top_traded_coins['dataframe'] once
+                if not 'date' in self.top_traded_coins['dataframe']:
+                    self.top_traded_coins['dataframe']['date'] = pair_dataframe['date']
+                    self.top_traded_coins['dataframe'].set_index('date')
+
+                # Calculate daily traded volume
+                pair_dataframe[coin] = pair_dataframe['volume'] * qtpylib.typical_price(pair_dataframe)
+
+                # Drop the columns we don't need
+                pair_dataframe.drop(columns=['open', 'high', 'low', 'close', 'volume'], inplace=True)
+
+                # Merge it in on the date key
+                self.top_traded_coins['dataframe'] = self.top_traded_coins['dataframe'].merge(pair_dataframe, on='date', how='left')
+
+            # Forward fill empty cells (due to different df shapes)
+            self.top_traded_coins['dataframe'].ffill()
+
+            # Store and drop date column for value sorting
+            pair_dates = self.top_traded_coins['dataframe']['date']
+            self.top_traded_coins['dataframe'].drop(columns=['date'], inplace=True)
+
+            # Build columns and top traded coins
+            column_names = [f"Coin #{i}" for i in range(1, self.top_traded_coins['list_length'] + 1)]
+            self.top_traded_coins['dataframe'][column_names] = self.top_traded_coins['dataframe'].apply(lambda x: x.nlargest(self.top_traded_coins['list_length']).index.values, axis=1, result_type='expand')
+            self.top_traded_coins['dataframe'].drop(columns=[col for col in self.top_traded_coins['dataframe'] if col not in column_names], inplace=True)
+
+            # Re-add stored date column
+            self.top_traded_coins['dataframe'].insert(loc = 0, column = 'date', value = pair_dates)
+            self.top_traded_coins['dataframe'].set_index('date')
+            self.top_traded_coins['updated'] = True
+            log.info("Updated top traded pairlist (tail-5):")
+            log.info("\n", self.top_traded_coins['dataframe'].tail(5))
+
+            tok = time.perf_counter()
+            log.info(f"Updating top traded pairlist took {tok - tik:0.4f} seconds...")
+
+    def is_top_coin(self, coin_pair, row_data) -> bool:
+        return coin_pair.split('/')[0] in row_data.loc['Coin #1':f"Coin #{self.top_traded_coins['list_length']}"].values
+
     def bot_loop_start(self, **kwargs) -> None:
         """
         Called at the start of the bot iteration (one loop).
@@ -2302,6 +2379,9 @@ class NostalgiaForInfinityNext(IStrategy):
         (e.g. gather some remote resource for comparison)
         :param **kwargs: Ensure to keep this here so updates to this won't break your strategy.
         """
+
+        if self.top_traded_coins['enabled']:
+            self.dynamic_volume_list()
 
         if self.config["runmode"].value not in ("live", "dry_run"):
             return super().bot_loop_start(**kwargs)
@@ -3708,12 +3788,12 @@ class NostalgiaForInfinityNext(IStrategy):
             return f"{signal_name} ( {buy_tag} )"
 
         # Stoplosses
-        if any(c in ['1', '2', '3', '4', '5', '6', '8', '9', '10', '13', '14', '15', '16', '17', '18', '20', '21', '22', '23', '24', '25', '26', '27', '28', '29', '30', '31', '32', '33', '34', '35', '36', '37', '38', '39', '40', '41', '42', '43', '44', '45', '46', '47', '48'] for c in buy_tags):
+        if any(c in ['1', '2', '4', '5', '6', '8', '9', '10', '13', '14', '15', '16', '17', '18', '20', '21', '22', '23', '24', '25', '26', '27', '28', '29', '30', '31', '32', '33', '34', '35', '36', '37', '38', '39', '40', '41', '42', '43', '44', '45', '46', '47', '48'] for c in buy_tags):
             sell, signal_name = self.sell_stoploss_atr(current_profit, last_candle, previous_candle_1, trade, current_time)
             if sell and (signal_name is not None):
                 return f"{signal_name} ( {buy_tag} )"
 
-        if all(c in ['7', '11', '12', '19'] for c in buy_tags):
+        if all(c in ['3', '7', '11', '12', '19'] for c in buy_tags):
             sell, signal_name = self.sell_stoploss_extra(current_profit, max_profit, max_loss, last_candle, previous_candle_1, trade, current_time)
             if sell and (signal_name is not None):
                 return f"{signal_name} ( {buy_tag} )"
@@ -3957,16 +4037,31 @@ class NostalgiaForInfinityNext(IStrategy):
         return informative_pairs
 
     def informative_1d_indicators(self, dataframe: DataFrame, metadata: dict) -> DataFrame:
+        tik = time.perf_counter()
         assert self.dp, "DataProvider is required for multiple timeframes."
         # Get the informative pair
         informative_1d = self.dp.get_pair_dataframe(pair=metadata['pair'], timeframe=self.info_timeframe_1d)
 
-        # pivots
+        # Top traded coins
+        if self.top_traded_coins['enabled']:
+            informative_1d = informative_1d.merge(self.top_traded_coins['dataframe'], on='date', how='left')
+            informative_1d['is_top_coin'] = informative_1d.apply(lambda row: self.is_top_coin(metadata['pair'], row), axis=1)
+            column_names = [f"Coin #{i}" for i in range(1, self.top_traded_coins['list_length'] + 1)]
+            informative_1d.drop(columns = column_names, inplace=True)
+
+        # Pivots
         informative_1d['pivot'], informative_1d['res1'], informative_1d['res2'], informative_1d['res3'], informative_1d['sup1'], informative_1d['sup2'], informative_1d['sup3'] = pivot_points(informative_1d, mode='fibonacci')
+
+        # Smoothed Heikin-Ashi
+        informative_1d['open_sha'], informative_1d['close_sha'], informative_1d['low_sha'] = HeikinAshi(informative_1d, smooth_inputs=True, smooth_outputs=False, length=10)
+
+        tok = time.perf_counter()
+        log.debug(f"[{metadata['pair']}] informative_1d_indicators took: {tok - tik:0.4f} seconds.")
 
         return informative_1d
 
     def informative_1h_indicators(self, dataframe: DataFrame, metadata: dict) -> DataFrame:
+        tik = time.perf_counter()
         assert self.dp, "DataProvider is required for multiple timeframes."
         # Get the informative pair
         informative_1h = self.dp.get_pair_dataframe(pair=metadata['pair'], timeframe=self.info_timeframe_1h)
@@ -4109,9 +4204,13 @@ class NostalgiaForInfinityNext(IStrategy):
         informative_1h['sell_pump_24_2'] = (informative_1h['hl_pct_change_24'] > self.sell_pump_threshold_24_2)
         informative_1h['sell_pump_24_3'] = (informative_1h['hl_pct_change_24'] > self.sell_pump_threshold_24_3)
 
+        tok = time.perf_counter()
+        log.debug(f"[{metadata['pair']}] informative_1h_indicators took: {tok - tik:0.4f} seconds.")
+
         return informative_1h
 
     def normal_tf_indicators(self, dataframe: DataFrame, metadata: dict) -> DataFrame:
+        tik = time.perf_counter()
         # BB 40 - STD2
         bb_40_std2 = qtpylib.bollinger_bands(dataframe['close'], window=40, stds=2)
         dataframe['bb40_2_low'] = bb_40_std2['lower']
@@ -4271,6 +4370,9 @@ class NostalgiaForInfinityNext(IStrategy):
             # Exchange downtime protection
             dataframe['live_data_ok'] = (dataframe['volume'].rolling(window=72, min_periods=72).min() > 0)
 
+        tok = time.perf_counter()
+        log.debug(f"[{metadata['pair']}] normal_tf_indicators took: {tok - tik:0.4f} seconds.")
+
         return dataframe
 
     def resampled_tf_indicators(self, dataframe: DataFrame, metadata: dict) -> DataFrame:
@@ -4281,6 +4383,7 @@ class NostalgiaForInfinityNext(IStrategy):
         return dataframe
 
     def base_tf_btc_indicators(self, dataframe: DataFrame, metadata: dict) -> DataFrame:
+        tik = time.perf_counter()
         # Indicators
         # -----------------------------------------------------------------------------------------
         dataframe['rsi_14'] = ta.RSI(dataframe, timeperiod=14)
@@ -4290,9 +4393,13 @@ class NostalgiaForInfinityNext(IStrategy):
         ignore_columns = ['date', 'open', 'high', 'low', 'close', 'volume']
         dataframe.rename(columns=lambda s: f"btc_{s}" if s not in ignore_columns else s, inplace=True)
 
+        tok = time.perf_counter()
+        log.debug(f"[{metadata['pair']}] base_tf_btc_indicators took: {tok - tik:0.4f} seconds.")
+
         return dataframe
 
     def info_tf_btc_indicators(self, dataframe: DataFrame, metadata: dict) -> DataFrame:
+        tik = time.perf_counter()
         # Indicators
         # -----------------------------------------------------------------------------------------
         dataframe['rsi_14'] = ta.RSI(dataframe, timeperiod=14)
@@ -4303,9 +4410,13 @@ class NostalgiaForInfinityNext(IStrategy):
         ignore_columns = ['date', 'open', 'high', 'low', 'close', 'volume']
         dataframe.rename(columns=lambda s: f"btc_{s}" if s not in ignore_columns else s, inplace=True)
 
+        tok = time.perf_counter()
+        log.debug(f"[{metadata['pair']}] info_tf_btc_indicators took: {tok - tik:0.4f} seconds.")
+
         return dataframe
 
     def daily_tf_btc_indicators(self, dataframe: DataFrame, metadata: dict) -> DataFrame:
+        tik = time.perf_counter()
         # Indicators
         # -----------------------------------------------------------------------------------------
         dataframe['pivot'], dataframe['res1'], dataframe['res2'], dataframe['res3'], dataframe['sup1'], dataframe['sup2'], dataframe['sup3'] = pivot_points(dataframe, mode='fibonacci')
@@ -4314,6 +4425,9 @@ class NostalgiaForInfinityNext(IStrategy):
         # -----------------------------------------------------------------------------------------
         ignore_columns = ['date', 'open', 'high', 'low', 'close', 'volume']
         dataframe.rename(columns=lambda s: f"btc_{s}" if s not in ignore_columns else s, inplace=True)
+
+        tok = time.perf_counter()
+        log.debug(f"[{metadata['pair']}] daily_tf_btc_indicators took: {tok - tik:0.4f} seconds.")
 
         return dataframe
 
@@ -4387,8 +4501,7 @@ class NostalgiaForInfinityNext(IStrategy):
         dataframe = self.normal_tf_indicators(dataframe, metadata)
 
         tok = time.perf_counter()
-        if self.has_loop_perf_logging:
-            log.info(f"Populate indicators for pair: {metadata['pair']} took {tok - tik:0.4f} seconds.")
+        log.debug(f"[{metadata['pair']}] Populate indicators took a total of: {tok - tik:0.4f} seconds.")
 
         return dataframe
 
@@ -4469,16 +4582,18 @@ class NostalgiaForInfinityNext(IStrategy):
                 # Condition #3
                 elif index == 3:
                     # Non-Standard protections
-                    item_buy_logic.append(dataframe['close'] > (dataframe['ema_200_1h'] * self.buy_ema_rel_3))
 
                     # Logic
                     item_buy_logic.append(dataframe['bb40_2_low'].shift().gt(0))
-                    item_buy_logic.append(dataframe['bb40_2_delta'].gt(dataframe['close'] * self.buy_bb40_bbdelta_close_3))
-                    item_buy_logic.append(dataframe['closedelta'].gt(dataframe['close'] * self.buy_bb40_closedelta_close_3))
-                    item_buy_logic.append(dataframe['tail'].lt(dataframe['bb40_2_delta'] * self.buy_bb40_tail_bbdelta_3))
+                    item_buy_logic.append(dataframe['bb40_2_delta'].gt(dataframe['close'] * self.buy_3_bb40_bbdelta_close))
+                    item_buy_logic.append(dataframe['closedelta'].gt(dataframe['close'] * self.buy_3_bb40_closedelta_close))
+                    item_buy_logic.append(dataframe['tail'].lt(dataframe['bb40_2_delta'] * self.buy_3_bb40_tail_bbdelta))
                     item_buy_logic.append(dataframe['close'].lt(dataframe['bb40_2_low'].shift()))
                     item_buy_logic.append(dataframe['close'].le(dataframe['close'].shift()))
-                    item_buy_logic.append(dataframe['cti'] < self.buy_cti_3)
+                    item_buy_logic.append(dataframe['cci_36_osc'] > self.buy_3_cci_36_osc_min)
+                    item_buy_logic.append(dataframe['crsi_1h'] > self.buy_3_crsi_1h_min)
+                    item_buy_logic.append(dataframe['r_480_1h'] > self.buy_3_r_480_1h_min)
+                    item_buy_logic.append(dataframe['cti_1h'] < self.buy_3_cti_1h_max)
 
                 # Condition #4
                 elif index == 4:
@@ -5473,6 +5588,39 @@ def pivot_points(dataframe: DataFrame, mode = 'fibonacci') -> Series:
         sup3 = hlc3_pivot - 1 * hl_range
 
     return hlc3_pivot, res1, res2, res3, sup1, sup2, sup3
+
+def HeikinAshi(dataframe, smooth_inputs = False, smooth_outputs = False, length = 10):
+    df = dataframe[['open','close','high','low']].copy().fillna(0)
+    if smooth_inputs:
+        df['open_s']  = ta.EMA(df['open'], timeframe = length)
+        df['high_s']  = ta.EMA(df['high'], timeframe = length)
+        df['low_s']   = ta.EMA(df['low'],  timeframe = length)
+        df['close_s'] = ta.EMA(df['close'],timeframe = length)
+
+        open_ha  = (df['open_s'].shift(1) + df['close_s'].shift(1)) / 2
+        high_ha  = df.loc[:, ['high_s', 'open_s', 'close_s']].max(axis=1)
+        low_ha   = df.loc[:, ['low_s', 'open_s', 'close_s']].min(axis=1)
+        close_ha = (df['open_s'] + df['high_s'] + df['low_s'] + df['close_s'])/4
+    else:
+        open_ha  = (df['open'].shift(1) + df['close'].shift(1)) / 2
+        high_ha  = df.loc[:, ['high', 'open', 'close']].max(axis=1)
+        low_ha   = df.loc[:, ['low', 'open', 'close']].min(axis=1)
+        close_ha = (df['open'] + df['high'] + df['low'] + df['close'])/4
+
+    open_ha = open_ha.fillna(0)
+    high_ha = high_ha.fillna(0)
+    low_ha  = low_ha.fillna(0)
+    close_ha = close_ha.fillna(0)
+
+    if smooth_outputs:
+        open_sha  = ta.EMA(open_ha, timeframe = length)
+        high_sha  = ta.EMA(high_ha, timeframe = length)
+        low_sha   = ta.EMA(low_ha, timeframe = length)
+        close_sha = ta.EMA(close_ha, timeframe = length)
+
+        return open_sha, close_sha, low_sha
+    else:
+        return open_ha, close_ha, low_ha
 
 class Cache:
 
