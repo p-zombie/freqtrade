@@ -61,6 +61,13 @@ jobs:
           keep_files: 3
           args: up -d --force-recreate
 
+      - name: Notify telegram
+        uses: appleboy/telegram-action@master
+        with:
+          to: ${{ secrets.TELEGRAM_TO }}
+          token: ${{ secrets.TELEGRAM_TOKEN }}
+          args: App deployed.
+
       - name: Move cache
         run: |
           rm -rf /tmp/.buildx-cache
