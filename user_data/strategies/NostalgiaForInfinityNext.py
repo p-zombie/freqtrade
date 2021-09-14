@@ -3583,12 +3583,6 @@ class NostalgiaForInfinityNext(IStrategy):
         if (0.06 > current_profit > 0.02) and (last_candle['cti'] > 0.95):
             return True, 'signal_profit_q_2'
 
-        if (last_candle['close'] < last_candle['atr_high_thresh_q']) and (previous_candle_1['close'] > previous_candle_1['atr_high_thresh_q']):
-            if (0.05 > current_profit > 0.02):
-                return True, 'signal_profit_q_atr'
-            elif (current_profit < -0.08) and (last_candle['sma_200_dec_24']) and (last_candle['ema_25'] < last_candle['ema_50']) and (last_candle['sma_200_dec_24']) and (last_candle['ema_25'] < last_candle['ema_50']):
-                return True, 'signal_stoploss_q_atr'
-
         if (0.04 > current_profit > 0.02) and (last_candle['pm'] <= last_candle['pmax_thresh']) and (last_candle['close'] > last_candle['sma_21'] * 1.1):
             return True, 'signal_profit_q_pmax_bull'
         if (0.045 > current_profit > 0.005) and (last_candle['pm'] > last_candle['pmax_thresh']) and (last_candle['close'] > last_candle['sma_21'] * 1.016):
@@ -3859,7 +3853,7 @@ class NostalgiaForInfinityNext(IStrategy):
             if sell and (signal_name is not None):
                 return f"{signal_name} ( {buy_tag} )"
 
-        if any(c in ['empty', '1', '2', '3', '4', '5', '6', '7', '8', '9', '10', '11', '12', '13', '14', '15', '16', '17', '18', '19', '39', '43'] for c in buy_tags):
+        if any(c in ['empty', '1', '2', '3', '4', '5', '6', '7', '8', '9', '10', '11', '12', '13', '14', '15', '16', '17', '18', '19', '32', '33', '34', '35', '36', '37', '38', '39','40', '43'] for c in buy_tags):
             sell, signal_name = self.sell_stoploss_extra(current_profit, max_profit, max_loss, last_candle, previous_candle_1, trade, current_time)
             if sell and (signal_name is not None):
                 return f"{signal_name} ( {buy_tag} )"
@@ -4401,7 +4395,6 @@ class NostalgiaForInfinityNext(IStrategy):
         dataframe['atr_high_thresh_2'] = (dataframe['high'] - (dataframe['atr'] * 5.2))
         dataframe['atr_high_thresh_3'] = (dataframe['high'] - (dataframe['atr'] * 5.0))
         dataframe['atr_high_thresh_4'] = (dataframe['high'] - (dataframe['atr'] * 2.0))
-        dataframe['atr_high_thresh_q'] = (dataframe['high'] - (dataframe['atr'] * 3.0))
         dataframe['atr_high_thresh_l'] = (dataframe['high'] - (dataframe['atr'] * 3.0))
 
         # Dip protection
