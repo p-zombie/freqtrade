@@ -1941,7 +1941,7 @@ class NostalgiaForInfinityNext(IStrategy):
     buy_47_cti_1h_min = -0.9
     buy_47_cti_1h_max = 0.3
 
-    buy_48_ewo_min = 8.0
+    buy_48_ewo_min = 8.5
     buy_48_ewo_1h_min = 14.0
     buy_48_r_480_min = -25.0
     buy_48_r_480_1h_min = -50.0
@@ -4203,7 +4203,6 @@ class NostalgiaForInfinityNext(IStrategy):
         informative_1h['rsi_14'] = ta.RSI(informative_1h, timeperiod=14)
 
         # EWO
-        informative_1h['ewo'] = ewo(informative_1h, 50, 200)
         informative_1h['ewo_sma'] = ewo_sma(informative_1h, 50, 200)
 
         # BB
@@ -4380,7 +4379,6 @@ class NostalgiaForInfinityNext(IStrategy):
         dataframe['cmf'] = chaikin_money_flow(dataframe, 20)
 
         # EWO
-        dataframe['ewo'] = ewo(dataframe, 50, 200)
         dataframe['ewo_sma'] = ewo_sma(dataframe, 50, 200)
 
         # RSI
@@ -4441,10 +4439,6 @@ class NostalgiaForInfinityNext(IStrategy):
         # HLC3
         dataframe['hlc3'] = (dataframe['high'] + dataframe['low'] + dataframe['close']) / 3
 
-        # ZLEMA
-        dataframe['zlema_2'] = pta.zlma(dataframe['hlc3'], length = 2)
-        dataframe['zlema_4'] = pta.zlma(dataframe['hlc3'], length = 4)
-
         # CCI
         dataframe['cci'] = ta.CCI(dataframe, source='hlc3', timeperiod=20)
 
@@ -4453,14 +4447,6 @@ class NostalgiaForInfinityNext(IStrategy):
         cci_36_max = cci_36.rolling(self.startup_candle_count).max()
         cci_36_min = cci_36.rolling(self.startup_candle_count).min()
         dataframe['cci_36_osc'] = (cci_36 / cci_36_max).where(cci_36 > 0, -cci_36 / cci_36_min)
-
-        # ATR
-        dataframe['atr'] = ta.ATR(dataframe, timeperiod=14)
-        dataframe['atr_high_thresh_1'] = (dataframe['high'] - (dataframe['atr'] * 5.4))
-        dataframe['atr_high_thresh_2'] = (dataframe['high'] - (dataframe['atr'] * 5.2))
-        dataframe['atr_high_thresh_3'] = (dataframe['high'] - (dataframe['atr'] * 5.0))
-        dataframe['atr_high_thresh_4'] = (dataframe['high'] - (dataframe['atr'] * 2.0))
-        dataframe['atr_high_thresh_l'] = (dataframe['high'] - (dataframe['atr'] * 3.0))
 
         # MOMDIV
         mom = momdiv(dataframe)
@@ -5298,8 +5284,8 @@ class NostalgiaForInfinityNext(IStrategy):
                     item_buy_logic.append(dataframe['moderi_96'])
 
                     # Logic
-                    item_buy_logic.append(dataframe['ewo'] > self.buy_48_ewo_min)
-                    item_buy_logic.append(dataframe['ewo_1h'] > self.buy_48_ewo_1h_min)
+                    item_buy_logic.append(dataframe['ewo_sma'] > self.buy_48_ewo_min)
+                    item_buy_logic.append(dataframe['ewo_sma_1h'] > self.buy_48_ewo_1h_min)
                     item_buy_logic.append(dataframe['r_480'] > self.buy_48_r_480_min)
                     item_buy_logic.append(dataframe['r_480_1h'] > self.buy_48_r_480_1h_min)
                     item_buy_logic.append(dataframe['r_480_1h'] < self.buy_48_r_480_1h_max)
