@@ -14,8 +14,12 @@ jobs:
         run: |
           curl -O https://raw.githubusercontent.com/iterativv/NostalgiaForInfinity/main/NostalgiaForInfinityNext.py && \
           mv NostalgiaForInfinityNext.py user_data/strategies
+          curl -O https://raw.githubusercontent.com/iterativv/NostalgiaForInfinity/main/NostalgiaForInfinityNextGen.py && \
+          mv NostalgiaForInfinityNextGen.py user_data/strategies
           curl -O https://raw.githubusercontent.com/iterativv/NostalgiaForInfinity/main/configs/blacklist-binance.json && \
           mv blacklist-binance.json user_data
+          curl -O https://raw.githubusercontent.com/iterativv/NostalgiaForInfinity/main/configs/pairlist-volume-binance-usdt.json && \
+          mv pairlist-volume-binance-usdt.json user_data
       - name: Check for modified files
         id: git-check
         run: echo ::set-output name=modified::$([ -z "`git status --porcelain`" ] && echo "false" || echo "true")
