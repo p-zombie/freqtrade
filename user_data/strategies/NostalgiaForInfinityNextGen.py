@@ -253,11 +253,11 @@ class NostalgiaForInfinityNextGen(IStrategy):
             "safe_dips_threshold_2"     : None,
             "safe_dips_threshold_12"    : None,
             "safe_dips_threshold_144"   : None,
-            "safe_pump_6h_threshold"    : None,
-            "safe_pump_12h_threshold"   : 0.4,
-            "safe_pump_24h_threshold"   : 0.6,
-            "safe_pump_36h_threshold"   : 0.7,
-            "safe_pump_48h_threshold"   : 0.8,
+            "safe_pump_6h_threshold"    : 0.4,
+            "safe_pump_12h_threshold"   : None,
+            "safe_pump_24h_threshold"   : None,
+            "safe_pump_36h_threshold"   : None,
+            "safe_pump_48h_threshold"   : 1.45,
             "btc_1h_not_downtrend"      : True,
             "close_over_pivot_type"     : "none", # pivot, sup1, sup2, sup3, res1, res2, res3
             "close_over_pivot_offset"   : 1.0,
@@ -1012,19 +1012,19 @@ class NostalgiaForInfinityNextGen(IStrategy):
             return True, 'sell_stoploss_u_e_2'
 
         # Under EMA200, pair negative, low max rate
-        if (-0.04 > current_profit > -0.08) and (max_profit < 0.005) and (max_loss < 0.08) and (last_candle['close'] < last_candle['ema_200']) and (last_candle['ema_25'] < last_candle['ema_50']) and (last_candle['moderi_32'] == False) and (last_candle['moderi_64'] == False) and (last_candle['moderi_96'] == False) and (last_candle['cmf'] < -0.0):
+        if (-0.04 > current_profit > -0.08) and (max_profit < 0.005) and (max_loss < 0.08) and (last_candle['close'] < last_candle['ema_200']) and (last_candle['ema_25'] < last_candle['ema_50']) and (last_candle['ema_vwma_osc_32'] < 0.0 ) and (last_candle['ema_vwma_osc_64'] < 0.0) and (last_candle['ema_vwma_osc_96'] < 0.0) and (last_candle['cmf'] < -0.0):
             return True, 'sell_stoploss_u_e_3'
 
         # Under EMA200, pair and BTC negative, low max rate
-        if (-0.05 > current_profit > -0.09) and (last_candle['btc_not_downtrend_1h'] == False) and (last_candle['moderi_32'] == False) and (last_candle['moderi_64'] == False) and (max_profit < 0.005) and (max_loss < 0.09) and (last_candle['sma_200_dec_24']) and (last_candle['cmf'] < -0.0) and (last_candle['close'] < last_candle['ema_200']) and (last_candle['ema_25'] < last_candle['ema_50']) and (last_candle['cti'] < -0.8) and (last_candle['r_480'] < -50.0):
+        if (-0.05 > current_profit > -0.09) and (last_candle['btc_not_downtrend_1h'] == False) and (last_candle['ema_vwma_osc_32'] < 0.0) and (last_candle['ema_vwma_osc_64'] < 0.0) and (max_profit < 0.005) and (max_loss < 0.09) and (last_candle['sma_200_dec_24']) and (last_candle['cmf'] < -0.0) and (last_candle['close'] < last_candle['ema_200']) and (last_candle['ema_25'] < last_candle['ema_50']) and (last_candle['cti'] < -0.8) and (last_candle['r_480'] < -50.0):
             return True, 'sell_stoploss_u_e_b_1'
 
         # Under EMA200, pair and BTC negative, CTI, Elder Ray Index negative, normal max rate
-        elif (-0.1 > current_profit > -0.2) and (last_candle['btc_not_downtrend_1h'] == False) and (last_candle['moderi_32'] == False) and (last_candle['moderi_64'] == False) and (last_candle['moderi_96'] == False) and (max_profit < 0.05) and (max_loss < 0.2) and (last_candle['sma_200_dec_24']) and (last_candle['sma_200_dec_20_1h']) and (last_candle['cmf'] < -0.45) and (last_candle['close'] < last_candle['ema_200']) and (last_candle['ema_25'] < last_candle['ema_50']) and (last_candle['cti'] < -0.8) and (last_candle['r_480'] < -97.0):
+        elif (-0.1 > current_profit > -0.2) and (last_candle['btc_not_downtrend_1h'] == False) and (last_candle['ema_vwma_osc_32'] < 0.0) and (last_candle['ema_vwma_osc_64'] < 0.0) and (last_candle['ema_vwma_osc_96'] < 0.0) and (max_profit < 0.05) and (max_loss < 0.2) and (last_candle['sma_200_dec_24']) and (last_candle['sma_200_dec_20_1h']) and (last_candle['cmf'] < -0.45) and (last_candle['close'] < last_candle['ema_200']) and (last_candle['ema_25'] < last_candle['ema_50']) and (last_candle['cti'] < -0.8) and (last_candle['r_480'] < -97.0):
             return True, 'signal_stoploss_u_e_b_2'
 
         # Under EMA200, pair and BTC negative, low max rate
-        if (-0.04 > current_profit > -0.07) and (last_candle['moderi_32'] == False) and (last_candle['moderi_64'] == False) and (max_profit < 0.005) and (max_loss < 0.07) and (last_candle['sma_200_dec_24']) and (last_candle['close'] < last_candle['ema_200']) and (last_candle['ema_25'] < last_candle['ema_50']) and (last_candle['cmf'] < -0.0) and (last_candle['r_480'] < -50.0) and (last_candle['btc_not_downtrend_1h'] == False):
+        if (-0.04 > current_profit > -0.07) and (last_candle['ema_vwma_osc_32'] < 0.0) and (last_candle['ema_vwma_osc_64'] < 0.0) and (max_profit < 0.005) and (max_loss < 0.07) and (last_candle['sma_200_dec_24']) and (last_candle['close'] < last_candle['ema_200']) and (last_candle['ema_25'] < last_candle['ema_50']) and (last_candle['cmf'] < -0.0) and (last_candle['r_480'] < -50.0) and (last_candle['btc_not_downtrend_1h'] == False):
             return True, 'sell_stoploss_u_e_b_3'
 
         return False, None
@@ -1311,6 +1311,8 @@ class NostalgiaForInfinityNextGen(IStrategy):
                 return True, 'sell_profit_w_1_12'
             elif (last_candle['r_14'] >= -1.0) and (last_candle['rsi_14'] > 79.0) and (last_candle['cci'] > 400.0) and (last_candle['cmf_1h'] < -0.0):
                 return True, 'sell_profit_w_1_13'
+            elif (last_candle['r_14'] > -1.0) and (last_candle['rsi_14'] > 79.0) and (last_candle['cci'] > 320.0) and (last_candle['hl_pct_change_48_1h'] > 0.5):
+                return True, 'sell_profit_w_1_14'
         elif 0.03 > current_profit >= 0.02:
             if last_candle['r_480'] > -0.5:
                 return True, 'sell_profit_w_2_1'
@@ -1338,6 +1340,8 @@ class NostalgiaForInfinityNextGen(IStrategy):
                 return True, 'sell_profit_w_2_12'
             elif (last_candle['r_14'] >= -3.0) and (last_candle['rsi_14'] > 78.0) and (last_candle['cci'] > 360.0) and (last_candle['cmf_1h'] < -0.0):
                 return True, 'sell_profit_w_2_13'
+            elif (last_candle['r_14'] > -2.0) and (last_candle['rsi_14'] > 76.0) and (last_candle['cci'] > 280.0) and (last_candle['hl_pct_change_48_1h'] > 0.5):
+                return True, 'sell_profit_w_2_14'
         elif 0.04 > current_profit >= 0.03:
             if last_candle['r_480'] > -0.6:
                 return True, 'sell_profit_w_3_1'
@@ -1365,6 +1369,8 @@ class NostalgiaForInfinityNextGen(IStrategy):
                 return True, 'sell_profit_w_3_12'
             elif (last_candle['r_14'] >= -6.0) and (last_candle['rsi_14'] > 76.0) and (last_candle['cci'] > 320.0) and (last_candle['cmf_1h'] < -0.0):
                 return True, 'sell_profit_w_3_13'
+            elif (last_candle['r_14'] > -3.0) and (last_candle['rsi_14'] > 72.0) and (last_candle['cci'] > 260.0) and (last_candle['hl_pct_change_48_1h'] > 0.5):
+                return True, 'sell_profit_w_3_14'
         elif 0.05 > current_profit >= 0.04:
             if last_candle['r_480'] > -0.7:
                 return True, 'sell_profit_w_4_1'
@@ -1392,6 +1398,8 @@ class NostalgiaForInfinityNextGen(IStrategy):
                 return True, 'sell_profit_w_4_12'
             elif (last_candle['r_14'] >= -9.0) and (last_candle['rsi_14'] > 74.0) and (last_candle['cci'] > 280.0) and (last_candle['cmf_1h'] < -0.0):
                 return True, 'sell_profit_w_4_13'
+            elif (last_candle['r_14'] > -4.0) and (last_candle['rsi_14'] > 68.0) and (last_candle['cci'] > 220.0) and (last_candle['hl_pct_change_48_1h'] > 0.5):
+                return True, 'sell_profit_w_4_14'
         elif 0.06 > current_profit >= 0.05:
             if last_candle['r_480'] > -1.0:
                 return True, 'sell_profit_w_5_1'
@@ -1419,6 +1427,8 @@ class NostalgiaForInfinityNextGen(IStrategy):
                 return True, 'sell_profit_w_5_12'
             elif (last_candle['r_14'] >= -6.0) and (last_candle['rsi_14'] > 75.0) and (last_candle['cci'] > 300.0) and (last_candle['cmf_1h'] < -0.0):
                 return True, 'sell_profit_w_5_13'
+            elif (last_candle['r_14'] > -3.0) and (last_candle['rsi_14'] > 69.0) and (last_candle['cci'] > 240.0) and (last_candle['hl_pct_change_48_1h'] > 0.5):
+                return True, 'sell_profit_w_5_14'
         elif 0.07 > current_profit >= 0.06:
             if last_candle['r_480'] > -2.0:
                 return True, 'sell_profit_w_6_1'
@@ -1446,6 +1456,8 @@ class NostalgiaForInfinityNextGen(IStrategy):
                 return True, 'sell_profit_w_6_12'
             elif (last_candle['r_14'] >= -4.0) and (last_candle['rsi_14'] > 76.0) and (last_candle['cci'] > 320.0) and (last_candle['cmf_1h'] < -0.0):
                 return True, 'sell_profit_w_6_13'
+            elif (last_candle['r_14'] > -2.0) and (last_candle['rsi_14'] > 70.0) and (last_candle['cci'] > 260.0) and (last_candle['hl_pct_change_48_1h'] > 0.5):
+                return True, 'sell_profit_w_6_14'
         elif 0.08 > current_profit >= 0.07:
             if last_candle['r_480'] > -2.2:
                 return True, 'sell_profit_w_7_1'
@@ -1473,6 +1485,8 @@ class NostalgiaForInfinityNextGen(IStrategy):
                 return True, 'sell_profit_w_7_12'
             elif (last_candle['r_14'] >= -2.0) and (last_candle['rsi_14'] > 77.0) and (last_candle['cci'] > 340.0) and (last_candle['cmf_1h'] < -0.0):
                 return True, 'sell_profit_w_7_13'
+            elif (last_candle['r_14'] > -1.0) and (last_candle['rsi_14'] > 71.0) and (last_candle['cci'] > 280.0) and (last_candle['hl_pct_change_48_1h'] > 0.5):
+                return True, 'sell_profit_w_7_14'
         elif 0.09 > current_profit >= 0.08:
             if last_candle['r_480'] > -2.4:
                 return True, 'sell_profit_w_8_1'
@@ -1500,6 +1514,8 @@ class NostalgiaForInfinityNextGen(IStrategy):
                 return True, 'sell_profit_w_8_12'
             elif (last_candle['r_14'] >= -1.0) and (last_candle['rsi_14'] > 78.0) and (last_candle['cci'] > 360.0) and (last_candle['cmf_1h'] < -0.0):
                 return True, 'sell_profit_w_8_13'
+            elif (last_candle['r_14'] > -0.1) and (last_candle['rsi_14'] > 73.0) and (last_candle['cci'] > 300.0) and (last_candle['hl_pct_change_48_1h'] > 0.5):
+                return True, 'sell_profit_w_8_14'
         elif 0.1 > current_profit >= 0.09:
             if last_candle['r_480'] > -2.6:
                 return True, 'sell_profit_w_9_1'
@@ -1527,6 +1543,8 @@ class NostalgiaForInfinityNextGen(IStrategy):
                 return True, 'sell_profit_w_9_12'
             elif (last_candle['r_14'] >= -0.1) and (last_candle['rsi_14'] > 79.0) and (last_candle['cci'] > 380.0) and (last_candle['cmf_1h'] < -0.0):
                 return True, 'sell_profit_w_9_13'
+            elif (last_candle['r_14'] > -0.1) and (last_candle['rsi_14'] > 75.0) and (last_candle['cci'] > 320.0) and (last_candle['hl_pct_change_48_1h'] > 0.5):
+                return True, 'sell_profit_w_9_14'
         elif 0.12 > current_profit >= 0.1:
             if last_candle['r_480'] > -1.0:
                 return True, 'sell_profit_w_10_1'
@@ -1554,6 +1572,8 @@ class NostalgiaForInfinityNextGen(IStrategy):
                 return True, 'sell_profit_w_10_12'
             elif (last_candle['r_14'] >= -0.1) and (last_candle['rsi_14'] > 79.0) and (last_candle['cci'] > 400.0) and (last_candle['cmf_1h'] < -0.0):
                 return True, 'sell_profit_w_10_13'
+            elif (last_candle['r_14'] > -0.1) and (last_candle['rsi_14'] > 77.0) and (last_candle['cci'] > 340.0) and (last_candle['hl_pct_change_48_1h'] > 0.5):
+                return True, 'sell_profit_w_10_14'
         elif 0.2 > current_profit >= 0.12:
             if last_candle['r_480'] > -0.5:
                 return True, 'sell_profit_w_11_1'
@@ -1581,6 +1601,8 @@ class NostalgiaForInfinityNextGen(IStrategy):
                 return True, 'sell_profit_w_11_12'
             elif (last_candle['r_14'] >= -0.1) and (last_candle['rsi_14'] > 80.0) and (last_candle['cci'] > 420.0) and (last_candle['cmf_1h'] < -0.0):
                 return True, 'sell_profit_w_11_13'
+            elif (last_candle['r_14'] > -0.1) and (last_candle['rsi_14'] > 78.0) and (last_candle['cci'] > 360.0) and (last_candle['hl_pct_change_48_1h'] > 0.5):
+                return True, 'sell_profit_w_11_14'
         elif current_profit >= 0.2:
             if last_candle['r_480'] > -0.4:
                 return True, 'sell_profit_w_12_1'
@@ -1608,6 +1630,8 @@ class NostalgiaForInfinityNextGen(IStrategy):
                 return True, 'sell_profit_w_12_12'
             elif (last_candle['r_14'] >= -0.1) and (last_candle['rsi_14'] > 80.0) and (last_candle['cci'] > 440.0) and (last_candle['cmf_1h'] < -0.0):
                 return True, 'sell_profit_w_12_13'
+            elif (last_candle['r_14'] > -0.1) and (last_candle['rsi_14'] > 79.0) and (last_candle['cci'] > 380.0) and (last_candle['hl_pct_change_48_1h'] > 0.5):
+                return True, 'sell_profit_w_12_14'
 
         return False, None
 
@@ -1901,373 +1925,473 @@ class NostalgiaForInfinityNextGen(IStrategy):
             if (last_candle['moderi_96']):
                 if current_profit >= 0.2:
                     if (last_candle['rsi_14'] < 31.0):
-                        return True, 'sell_profit_p_bull_48_12_1'
+                        return True, 'sell_profit_p_bull_48_1_12_1'
                 elif 0.2 > current_profit >= 0.12:
                     if (last_candle['rsi_14'] < 33.0):
-                        return True, 'sell_profit_p_bull_48_11_1'
+                        return True, 'sell_profit_p_bull_48_1_11_1'
                 elif 0.12 > current_profit >= 0.1:
                     if (last_candle['rsi_14'] < 41.0):
-                        return True, 'sell_profit_p_bull_48_10_1'
+                        return True, 'sell_profit_p_bull_48_1_10_1'
                 elif 0.1 > current_profit >= 0.09:
                     if (last_candle['rsi_14'] < 51.0):
-                        return True, 'sell_profit_p_bull_48_9_1'
+                        return True, 'sell_profit_p_bull_48_1_9_1'
                 elif 0.09 > current_profit >= 0.08:
                     if (last_candle['rsi_14'] < 50.0):
-                        return True, 'sell_profit_p_bull_48_8_1'
+                        return True, 'sell_profit_p_bull_48_1_8_1'
                 elif 0.08 > current_profit >= 0.07:
                     if (last_candle['rsi_14'] < 49.0):
-                        return True, 'sell_profit_p_bull_48_7_1'
+                        return True, 'sell_profit_p_bull_48_1_7_1'
                 elif 0.07 > current_profit >= 0.06:
                     if (last_candle['rsi_14'] < 47.0):
-                        return True, 'sell_profit_p_bull_48_6_1'
+                        return True, 'sell_profit_p_bull_48_1_6_1'
                     elif (last_candle['rsi_14'] < 58.0) and (last_candle['cmf'] < -0.12):
-                        return True, 'sell_profit_p_bull_48_6_3'
+                        return True, 'sell_profit_p_bull_48_1_6_3'
                     elif (last_candle['rsi_14'] < 56.0) and (last_candle['r_14'] == 0):
-                        return True, 'sell_profit_p_bull_48_6_4'
+                        return True, 'sell_profit_p_bull_48_1_6_4'
+                    elif (last_candle['rsi_14'] > 77.0) and (last_candle['r_14'] <= -0.1):
+                        return True, 'sell_profit_p_bull_48_1_6_5'
                 elif 0.06 > current_profit >= 0.05:
                     if (last_candle['rsi_14'] < 45.0):
-                        return True, 'sell_profit_p_bull_48_5_1'
+                        return True, 'sell_profit_p_bull_48_1_5_1'
                     elif (last_candle['rsi_14'] < 56.0) and (last_candle['cmf'] < -0.12):
-                        return True, 'sell_profit_p_bull_48_5_3'
+                        return True, 'sell_profit_p_bull_48_1_5_3'
                     elif (last_candle['rsi_14'] < 54.0) and (last_candle['r_14'] == 0):
-                        return True, 'sell_profit_p_bull_48_5_4'
+                        return True, 'sell_profit_p_bull_48_1_5_4'
+                    elif (last_candle['rsi_14'] > 75.0) and (last_candle['r_14'] <= -0.1):
+                        return True, 'sell_profit_p_bull_48_1_5_5'
                 elif 0.05 > current_profit >= 0.04:
                     if (last_candle['rsi_14'] < 43.0):
-                        return True, 'sell_profit_p_bull_48_4_1'
+                        return True, 'sell_profit_p_bull_48_1_4_1'
                     elif (last_candle['rsi_14'] < 54.0) and (last_candle['cmf'] < -0.12):
-                        return True, 'sell_profit_p_bull_48_4_3'
+                        return True, 'sell_profit_p_bull_48_1_4_3'
                     elif (last_candle['rsi_14'] < 53.0) and (last_candle['r_14'] == 0):
-                        return True, 'sell_profit_p_bull_48_4_4'
+                        return True, 'sell_profit_p_bull_48_1_4_4'
+                    elif (last_candle['rsi_14'] > 73.0) and (last_candle['r_14'] <= -0.1):
+                        return True, 'sell_profit_p_bull_48_1_4_5'
                 elif 0.04 > current_profit >= 0.03:
                     if (last_candle['rsi_14'] < 39.0):
-                        return True, 'sell_profit_p_bull_48_3_1'
+                        return True, 'sell_profit_p_bull_48_1_3_1'
                     elif (last_candle['rsi_14'] < 46.0) and (last_candle['cmf'] < -0.12):
-                        return True, 'sell_profit_p_bull_48_3_3'
+                        return True, 'sell_profit_p_bull_48_1_3_3'
                     elif (last_candle['rsi_14'] < 50.0) and (last_candle['r_14'] == 0):
-                        return True, 'sell_profit_p_bull_48_3_4'
+                        return True, 'sell_profit_p_bull_48_1_3_4'
+                    elif (last_candle['rsi_14'] > 75.0) and (last_candle['r_14'] <= -0.1):
+                        return True, 'sell_profit_p_bull_48_1_3_5'
                 elif 0.03 > current_profit >= 0.02:
                     if (last_candle['rsi_14'] < 35.0):
-                        return True, 'sell_profit_p_bull_48_2_1'
+                        return True, 'sell_profit_p_bull_48_1_2_1'
                     elif (last_candle['rsi_14'] < 44.0) and (last_candle['cmf'] < -0.12):
-                        return True, 'sell_profit_p_bull_48_2_3'
+                        return True, 'sell_profit_p_bull_48_1_2_3'
                     elif (last_candle['rsi_14'] < 48.0) and (last_candle['r_14'] == 0):
-                        return True, 'sell_profit_p_bull_48_2_4'
+                        return True, 'sell_profit_p_bull_48_1_2_4'
+                    elif (last_candle['rsi_14'] > 77.0) and (last_candle['r_14'] <= -0.1):
+                        return True, 'sell_profit_p_bull_48_1_2_5'
                 elif 0.02 > current_profit >= 0.01:
                     if (last_candle['rsi_14'] < 33.0):
-                        return True, 'sell_profit_p_bull_48_1_1'
+                        return True, 'sell_profit_p_bull_48_1_1_1'
                     elif (last_candle['rsi_14'] < 38.0) and (last_candle['cmf'] < -0.12):
-                        return True, 'sell_profit_p_bull_48_1_3'
+                        return True, 'sell_profit_p_bull_48_1_1_3'
                     elif (last_candle['rsi_14'] < 46.0) and (last_candle['r_14'] == 0):
-                        return True, 'sell_profit_p_bull_48_1_4'
+                        return True, 'sell_profit_p_bull_48_1_1_4'
+                    elif (last_candle['rsi_14'] > 79.0) and (last_candle['r_14'] <= -0.1):
+                        return True, 'sell_profit_p_bull_48_1_1_5'
             else:
                 if current_profit >= 0.2:
                     if (last_candle['rsi_14'] < 32.0):
-                        return True, 'sell_profit_p_bear_48_12_1'
+                        return True, 'sell_profit_p_bear_48_1_12_1'
                 elif 0.2 > current_profit >= 0.12:
                     if (last_candle['rsi_14'] < 34.0):
-                        return True, 'sell_profit_p_bear_48_11_1'
+                        return True, 'sell_profit_p_bear_48_1_11_1'
                 elif 0.12 > current_profit >= 0.1:
                     if (last_candle['rsi_14'] < 42.0):
-                        return True, 'sell_profit_p_bear_48_10_1'
+                        return True, 'sell_profit_p_bear_48_1_10_1'
                 elif 0.1 > current_profit >= 0.09:
                     if (last_candle['rsi_14'] < 52.0):
-                        return True, 'sell_profit_p_bear_48_9_1'
+                        return True, 'sell_profit_p_bear_48_1_9_1'
                 elif 0.09 > current_profit >= 0.08:
                     if (last_candle['rsi_14'] < 51.0):
-                        return True, 'sell_profit_p_bear_48_8_1'
+                        return True, 'sell_profit_p_bear_48_1_8_1'
                 elif 0.08 > current_profit >= 0.07:
                     if (last_candle['rsi_14'] < 50.0):
-                        return True, 'sell_profit_p_bear_48_7_1'
+                        return True, 'sell_profit_p_bear_48_1_7_1'
                 elif 0.07 > current_profit >= 0.06:
                     if (last_candle['rsi_14'] < 48.0):
-                        return True, 'sell_profit_p_bear_48_6_1'
+                        return True, 'sell_profit_p_bear_48_1_6_1'
                     elif (last_candle['rsi_14'] < 58.0) and (last_candle['cmf'] < -0.12):
-                        return True, 'sell_profit_p_bear_48_6_3'
+                        return True, 'sell_profit_p_bear_48_1_6_3'
                     elif (last_candle['rsi_14'] < 58.0) and (last_candle['r_14'] == 0):
-                        return True, 'sell_profit_p_bear_48_6_4'
+                        return True, 'sell_profit_p_bear_48_1_6_4'
+                    elif (last_candle['rsi_14'] > 76.0) and (last_candle['r_14'] <= -0.1):
+                        return True, 'sell_profit_p_bear_48_1_6_5'
                 elif 0.06 > current_profit >= 0.05:
                     if (last_candle['rsi_14'] < 46.0):
-                        return True, 'sell_profit_p_bear_48_5_1'
+                        return True, 'sell_profit_p_bear_48_1_5_1'
                     elif (last_candle['rsi_14'] < 56.0) and (last_candle['cmf'] < -0.12):
-                        return True, 'sell_profit_p_bear_48_5_3'
+                        return True, 'sell_profit_p_bear_48_1_5_3'
                     elif (last_candle['rsi_14'] < 56.0) and (last_candle['r_14'] == 0):
-                        return True, 'sell_profit_p_bear_48_5_4'
+                        return True, 'sell_profit_p_bear_48_1_5_4'
+                    elif (last_candle['rsi_14'] > 75.0) and (last_candle['r_14'] <= -0.1):
+                        return True, 'sell_profit_p_bear_48_1_5_5'
                 elif 0.05 > current_profit >= 0.04:
                     if (last_candle['rsi_14'] < 44.0):
-                        return True, 'sell_profit_p_bear_48_4_1'
+                        return True, 'sell_profit_p_bear_48_1_4_1'
                     elif (last_candle['rsi_14'] < 54.0) and (last_candle['cmf'] < -0.12):
-                        return True, 'sell_profit_p_bear_48_4_3'
+                        return True, 'sell_profit_p_bear_48_1_4_3'
                     elif (last_candle['rsi_14'] < 54.0) and (last_candle['r_14'] == 0):
-                        return True, 'sell_profit_p_bear_48_4_4'
+                        return True, 'sell_profit_p_bear_48_1_4_4'
+                    elif (last_candle['rsi_14'] > 72.0) and (last_candle['r_14'] <= -0.1):
+                        return True, 'sell_profit_p_bear_48_1_4_5'
                 elif 0.04 > current_profit >= 0.03:
                     if (last_candle['rsi_14'] < 40.0):
-                        return True, 'sell_profit_p_bear_48_3_1'
+                        return True, 'sell_profit_p_bear_48_1_3_1'
                     elif (last_candle['rsi_14'] < 44.0) and (last_candle['cmf'] < -0.12):
-                        return True, 'sell_profit_p_bear_48_3_3'
+                        return True, 'sell_profit_p_bear_48_1_3_3'
                     elif (last_candle['rsi_14'] < 52.0) and (last_candle['r_14'] == 0):
-                        return True, 'sell_profit_p_bear_48_3_4'
+                        return True, 'sell_profit_p_bear_48_1_3_4'
+                    elif (last_candle['rsi_14'] > 74.0) and (last_candle['r_14'] <= -0.1):
+                        return True, 'sell_profit_p_bear_48_1_3_5'
                 elif 0.03 > current_profit >= 0.02:
                     if (last_candle['rsi_14'] < 36.0):
-                        return True, 'sell_profit_p_bear_48_2_1'
+                        return True, 'sell_profit_p_bear_48_1_2_1'
                     elif (last_candle['rsi_14'] < 42.0) and (last_candle['cmf'] < -0.12):
-                        return True, 'sell_profit_p_bear_48_2_3'
+                        return True, 'sell_profit_p_bear_48_1_2_3'
                     elif (last_candle['rsi_14'] < 50.0) and (last_candle['r_14'] == 0):
-                        return True, 'sell_profit_p_bear_48_2_4'
+                        return True, 'sell_profit_p_bear_48_1_2_4'
+                    elif (last_candle['rsi_14'] > 76.0) and (last_candle['r_14'] <= -0.1):
+                        return True, 'sell_profit_p_bear_48_1_2_5'
                 elif 0.02 > current_profit >= 0.01:
                     if (last_candle['rsi_14'] < 34.0):
-                        return True, 'sell_profit_p_bear_48_1_1'
+                        return True, 'sell_profit_p_bear_48_1_1_1'
                     elif (last_candle['rsi_14'] < 40.0) and (last_candle['cmf'] < -0.12):
-                        return True, 'sell_profit_p_bear_48_1_3'
+                        return True, 'sell_profit_p_bear_48_1_1_3'
                     elif (last_candle['rsi_14'] < 48.0) and (last_candle['r_14'] == 0):
-                        return True, 'sell_profit_p_bear_48_1_4'
+                        return True, 'sell_profit_p_bear_48_1_1_4'
+                    elif (last_candle['rsi_14'] > 78.0) and (last_candle['r_14'] <= -0.1):
+                        return True, 'sell_profit_p_bear_48_1_1_5'
+
+        elif (last_candle['hl_pct_change_48_1h'] > 0.5):
+            if (last_candle['moderi_96']):
+                if current_profit >= 0.2:
+                    if (last_candle['rsi_14'] < 32.0) and (last_candle['cmf'] < -0.35):
+                        return True, 'sell_profit_p_bull_48_2_12_1'
+                elif 0.2 > current_profit >= 0.12:
+                    if (last_candle['rsi_14'] < 33.0) and (last_candle['cmf'] < -0.35):
+                        return True, 'sell_profit_p_bull_48_2_11_1'
+                elif 0.12 > current_profit >= 0.1:
+                    if (last_candle['rsi_14'] < 35.0) and (last_candle['cmf'] < -0.35):
+                        return True, 'sell_profit_p_bull_48_2_10_1'
+                elif 0.1 > current_profit >= 0.09:
+                    if (last_candle['rsi_14'] < 39.0) and (last_candle['cmf'] < -0.3):
+                        return True, 'sell_profit_p_bull_48_2_9_1'
+                elif 0.09 > current_profit >= 0.08:
+                    if (last_candle['rsi_14'] < 43.0) and (last_candle['cmf'] < -0.25):
+                        return True, 'sell_profit_p_bull_48_2_8_1'
+                elif 0.08 > current_profit >= 0.07:
+                    if (last_candle['rsi_14'] < 47.0) and (last_candle['cmf'] < -0.25):
+                        return True, 'sell_profit_p_bull_48_2_7_1'
+                elif 0.07 > current_profit >= 0.06:
+                    if (last_candle['rsi_14'] < 51.0) and (last_candle['cmf'] < -0.25):
+                        return True, 'sell_profit_p_bull_48_2_6_1'
+                elif 0.06 > current_profit >= 0.05:
+                    if (last_candle['rsi_14'] < 55.0) and (last_candle['cmf'] < -0.2):
+                        return True, 'sell_profit_p_bull_48_2_5_1'
+                elif 0.05 > current_profit >= 0.04:
+                    if (last_candle['rsi_14'] < 51.0) and (last_candle['cmf'] < -0.2):
+                        return True, 'sell_profit_p_bull_48_2_4_1'
+                elif 0.04 > current_profit >= 0.03:
+                    if (last_candle['rsi_14'] < 47.0) and (last_candle['cmf'] < -0.25):
+                        return True, 'sell_profit_p_bull_48_2_3_1'
+                elif 0.03 > current_profit >= 0.02:
+                    if (last_candle['rsi_14'] < 43.0) and (last_candle['cmf'] < -0.25):
+                        return True, 'sell_profit_p_bull_48_2_2_1'
+                elif 0.02 > current_profit >= 0.01:
+                    if (last_candle['rsi_14'] < 39.0) and (last_candle['cmf'] < -0.25):
+                        return True, 'sell_profit_p_bull_48_2_2_1'
+            else:
+                if current_profit >= 0.2:
+                    if (last_candle['rsi_14'] < 33.0) and (last_candle['cmf'] < -0.35):
+                        return True, 'sell_profit_p_bear_48_2_12_1'
+                elif 0.2 > current_profit >= 0.12:
+                    if (last_candle['rsi_14'] < 34.0) and (last_candle['cmf'] < -0.35):
+                        return True, 'sell_profit_p_bear_48_2_11_1'
+                elif 0.12 > current_profit >= 0.1:
+                    if (last_candle['rsi_14'] < 36.0) and (last_candle['cmf'] < -0.35):
+                        return True, 'sell_profit_p_bear_48_2_10_1'
+                elif 0.1 > current_profit >= 0.09:
+                    if (last_candle['rsi_14'] < 40.0) and (last_candle['cmf'] < -0.3):
+                        return True, 'sell_profit_p_bear_48_2_9_1'
+                elif 0.09 > current_profit >= 0.08:
+                    if (last_candle['rsi_14'] < 44.0) and (last_candle['cmf'] < -0.25):
+                        return True, 'sell_profit_p_bear_48_2_8_1'
+                elif 0.08 > current_profit >= 0.07:
+                    if (last_candle['rsi_14'] < 48.0) and (last_candle['cmf'] < -0.25):
+                        return True, 'sell_profit_p_bear_48_2_7_1'
+                elif 0.07 > current_profit >= 0.06:
+                    if (last_candle['rsi_14'] < 52.0) and (last_candle['cmf'] < -0.25):
+                        return True, 'sell_profit_p_bear_48_2_6_1'
+                elif 0.06 > current_profit >= 0.05:
+                    if (last_candle['rsi_14'] < 56.0) and (last_candle['cmf'] < -0.2):
+                        return True, 'sell_profit_p_bear_48_2_5_1'
+                elif 0.05 > current_profit >= 0.04:
+                    if (last_candle['rsi_14'] < 52.0) and (last_candle['cmf'] < -0.2):
+                        return True, 'sell_profit_p_bear_48_2_4_1'
+                elif 0.04 > current_profit >= 0.03:
+                    if (last_candle['rsi_14'] < 48.0) and (last_candle['cmf'] < -0.25):
+                        return True, 'sell_profit_p_bear_48_2_3_1'
+                elif 0.03 > current_profit >= 0.02:
+                    if (last_candle['rsi_14'] < 44.0) and (last_candle['cmf'] < -0.25):
+                        return True, 'sell_profit_p_bear_48_2_2_1'
+                elif 0.02 > current_profit >= 0.01:
+                    if (last_candle['rsi_14'] < 40.0) and (last_candle['cmf'] < -0.25):
+                        return True, 'sell_profit_p_bear_48_2_2_1'
 
         elif (last_candle['hl_pct_change_36_1h'] > 0.72):
             if (last_candle['moderi_96']):
                 if current_profit >= 0.2:
                     if (last_candle['rsi_14'] < 31.0):
-                        return True, 'sell_profit_p_bull_36_12_1'
+                        return True, 'sell_profit_p_bull_36_1_12_1'
                 elif 0.2 > current_profit >= 0.12:
                     if (last_candle['rsi_14'] < 33.0):
-                        return True, 'sell_profit_p_bull_36_11_1'
+                        return True, 'sell_profit_p_bull_36_1_11_1'
                 elif 0.12 > current_profit >= 0.1:
                     if (last_candle['rsi_14'] < 41.0):
-                        return True, 'sell_profit_p_bull_36_10_1'
+                        return True, 'sell_profit_p_bull_36_1_10_1'
                 elif 0.1 > current_profit >= 0.09:
                     if (last_candle['rsi_14'] < 51.0):
-                        return True, 'sell_profit_p_bull_36_9_1'
+                        return True, 'sell_profit_p_bull_36_1_9_1'
                 elif 0.09 > current_profit >= 0.08:
                     if (last_candle['rsi_14'] < 50.0):
-                        return True, 'sell_profit_p_bull_36_8_1'
+                        return True, 'sell_profit_p_bull_36_1_8_1'
                 elif 0.08 > current_profit >= 0.07:
                     if (last_candle['rsi_14'] < 49.0):
-                        return True, 'sell_profit_p_bull_36_7_1'
+                        return True, 'sell_profit_p_bull_36_1_7_1'
                 elif 0.07 > current_profit >= 0.06:
                     if (last_candle['rsi_14'] < 47.0):
-                        return True, 'sell_profit_p_bull_36_6_1'
+                        return True, 'sell_profit_p_bull_36_1_6_1'
                     elif (last_candle['rsi_14'] < 58.0) and (last_candle['cmf'] < -0.12):
-                        return True, 'sell_profit_p_bull_36_6_3'
+                        return True, 'sell_profit_p_bull_36_1_6_3'
                     elif (last_candle['rsi_14'] < 56.0) and (last_candle['r_14'] == 0):
-                        return True, 'sell_profit_p_bull_36_6_4'
+                        return True, 'sell_profit_p_bull_36_1_6_4'
                 elif 0.06 > current_profit >= 0.05:
                     if (last_candle['rsi_14'] < 45.0):
-                        return True, 'sell_profit_p_bull_36_5_1'
+                        return True, 'sell_profit_p_bull_36_1_5_1'
                     elif (last_candle['rsi_14'] < 56.0) and (last_candle['cmf'] < -0.12):
-                        return True, 'sell_profit_p_bull_36_5_3'
+                        return True, 'sell_profit_p_bull_36_1_5_3'
                     elif (last_candle['rsi_14'] < 54.0) and (last_candle['r_14'] == 0):
-                        return True, 'sell_profit_p_bull_36_5_4'
+                        return True, 'sell_profit_p_bull_36_1_5_4'
                 elif 0.05 > current_profit >= 0.04:
                     if (last_candle['rsi_14'] < 43.0):
-                        return True, 'sell_profit_p_bull_36_4_1'
+                        return True, 'sell_profit_p_bull_36_1_4_1'
                     elif (last_candle['rsi_14'] < 54.0) and (last_candle['cmf'] < -0.12):
-                        return True, 'sell_profit_p_bull_36_4_3'
+                        return True, 'sell_profit_p_bull_36_1_4_3'
                     elif (last_candle['rsi_14'] < 53.0) and (last_candle['r_14'] == 0):
-                        return True, 'sell_profit_p_bull_36_4_4'
+                        return True, 'sell_profit_p_bull_36_1_4_4'
                 elif 0.04 > current_profit >= 0.03:
                     if (last_candle['rsi_14'] < 39.0):
-                        return True, 'sell_profit_p_bull_36_3_1'
+                        return True, 'sell_profit_p_bull_36_1_3_1'
                     elif (last_candle['rsi_14'] < 46.0) and (last_candle['cmf'] < -0.12):
-                        return True, 'sell_profit_p_bull_36_3_3'
+                        return True, 'sell_profit_p_bull_36_1_3_3'
                     elif (last_candle['rsi_14'] < 50.0) and (last_candle['r_14'] == 0):
-                        return True, 'sell_profit_p_bull_36_3_4'
+                        return True, 'sell_profit_p_bull_36_1_3_4'
                 elif 0.03 > current_profit >= 0.02:
                     if (last_candle['rsi_14'] < 35.0):
-                        return True, 'sell_profit_p_bull_36_2_1'
+                        return True, 'sell_profit_p_bull_36_1_2_1'
                     elif (last_candle['rsi_14'] < 44.0) and (last_candle['cmf'] < -0.12):
-                        return True, 'sell_profit_p_bull_36_2_3'
+                        return True, 'sell_profit_p_bull_36_1_2_3'
                     elif (last_candle['rsi_14'] < 48.0) and (last_candle['r_14'] == 0):
-                        return True, 'sell_profit_p_bull_36_2_4'
+                        return True, 'sell_profit_p_bull_36_1_2_4'
                 elif 0.02 > current_profit >= 0.01:
                     if (last_candle['rsi_14'] < 33.0):
-                        return True, 'sell_profit_p_bull_36_1_1'
+                        return True, 'sell_profit_p_bull_36_1_1_1'
                     elif (last_candle['rsi_14'] < 38.0) and (last_candle['cmf'] < -0.12):
-                        return True, 'sell_profit_p_bull_36_1_3'
+                        return True, 'sell_profit_p_bull_36_1_1_3'
                     elif (last_candle['rsi_14'] < 46.0) and (last_candle['r_14'] == 0):
-                        return True, 'sell_profit_p_bull_36_1_4'
+                        return True, 'sell_profit_p_bull_36_1_1_4'
             else:
                 if current_profit >= 0.2:
                     if (last_candle['rsi_14'] < 32.0):
-                        return True, 'sell_profit_p_bear_36_12_1'
+                        return True, 'sell_profit_p_bear_36_1_12_1'
                 elif 0.2 > current_profit >= 0.12:
                     if (last_candle['rsi_14'] < 34.0):
-                        return True, 'sell_profit_p_bear_36_11_1'
+                        return True, 'sell_profit_p_bear_36_1_11_1'
                 elif 0.12 > current_profit >= 0.1:
                     if (last_candle['rsi_14'] < 42.0):
-                        return True, 'sell_profit_p_bear_36_10_1'
+                        return True, 'sell_profit_p_bear_36_1_10_1'
                 elif 0.1 > current_profit >= 0.09:
                     if (last_candle['rsi_14'] < 52.0):
-                        return True, 'sell_profit_p_bear_36_9_1'
+                        return True, 'sell_profit_p_bear_36_1_9_1'
                 elif 0.09 > current_profit >= 0.08:
                     if (last_candle['rsi_14'] < 51.0):
-                        return True, 'sell_profit_p_bear_36_8_1'
+                        return True, 'sell_profit_p_bear_36_1_8_1'
                 elif 0.08 > current_profit >= 0.07:
                     if (last_candle['rsi_14'] < 50.0):
-                        return True, 'sell_profit_p_bear_36_7_1'
+                        return True, 'sell_profit_p_bear_36_1_7_1'
                 elif 0.07 > current_profit >= 0.06:
                     if (last_candle['rsi_14'] < 48.0):
-                        return True, 'sell_profit_p_bear_36_6_1'
+                        return True, 'sell_profit_p_bear_36_1_6_1'
                     elif (last_candle['rsi_14'] < 58.0) and (last_candle['cmf'] < -0.12):
-                        return True, 'sell_profit_p_bear_36_6_3'
+                        return True, 'sell_profit_p_bear_36_1_6_3'
                     elif (last_candle['rsi_14'] < 58.0) and (last_candle['r_14'] == 0):
-                        return True, 'sell_profit_p_bear_36_6_4'
+                        return True, 'sell_profit_p_bear_36_1_6_4'
                 elif 0.06 > current_profit >= 0.05:
                     if (last_candle['rsi_14'] < 46.0):
-                        return True, 'sell_profit_p_bear_36_5_1'
+                        return True, 'sell_profit_p_bear_36_1_5_1'
                     elif (last_candle['rsi_14'] < 56.0) and (last_candle['cmf'] < -0.12):
-                        return True, 'sell_profit_p_bear_36_5_3'
+                        return True, 'sell_profit_p_bear_36_1_5_3'
                     elif (last_candle['rsi_14'] < 56.0) and (last_candle['r_14'] == 0):
-                        return True, 'sell_profit_p_bear_36_5_4'
+                        return True, 'sell_profit_p_bear_36_1_5_4'
                 elif 0.05 > current_profit >= 0.04:
                     if (last_candle['rsi_14'] < 44.0):
-                        return True, 'sell_profit_p_bear_36_4_1'
+                        return True, 'sell_profit_p_bear_36_1_4_1'
                     elif (last_candle['rsi_14'] < 54.0) and (last_candle['cmf'] < -0.12):
-                        return True, 'sell_profit_p_bear_36_4_3'
+                        return True, 'sell_profit_p_bear_36_1_4_3'
                     elif (last_candle['rsi_14'] < 54.0) and (last_candle['r_14'] == 0):
-                        return True, 'sell_profit_p_bear_36_4_4'
+                        return True, 'sell_profit_p_bear_36_1_4_4'
                 elif 0.04 > current_profit >= 0.03:
                     if (last_candle['rsi_14'] < 40.0):
-                        return True, 'sell_profit_p_bear_36_3_1'
+                        return True, 'sell_profit_p_bear_36_1_3_1'
                     elif (last_candle['rsi_14'] < 44.0) and (last_candle['cmf'] < -0.12):
-                        return True, 'sell_profit_p_bear_36_3_3'
+                        return True, 'sell_profit_p_bear_36_1_3_3'
                     elif (last_candle['rsi_14'] < 52.0) and (last_candle['r_14'] == 0):
-                        return True, 'sell_profit_p_bear_36_3_4'
+                        return True, 'sell_profit_p_bear_36_1_3_4'
                 elif 0.03 > current_profit >= 0.02:
                     if (last_candle['rsi_14'] < 36.0):
-                        return True, 'sell_profit_p_bear_36_2_1'
+                        return True, 'sell_profit_p_bear_36_1_2_1'
                     elif (last_candle['rsi_14'] < 42.0) and (last_candle['cmf'] < -0.12):
-                        return True, 'sell_profit_p_bear_36_2_3'
+                        return True, 'sell_profit_p_bear_36_1_2_3'
                     elif (last_candle['rsi_14'] < 50.0) and (last_candle['r_14'] == 0):
-                        return True, 'sell_profit_p_bear_36_2_4'
+                        return True, 'sell_profit_p_bear_36_1_2_4'
                 elif 0.02 > current_profit >= 0.01:
                     if (last_candle['rsi_14'] < 34.0):
-                        return True, 'sell_profit_p_bear_36_1_1'
+                        return True, 'sell_profit_p_bear_36_1_1_1'
                     elif (last_candle['rsi_14'] < 40.0) and (last_candle['cmf'] < -0.12):
-                        return True, 'sell_profit_p_bear_36_1_3'
+                        return True, 'sell_profit_p_bear_36_1_1_3'
                     elif (last_candle['rsi_14'] < 48.0) and (last_candle['r_14'] == 0):
-                        return True, 'sell_profit_p_bear_36_1_4'
+                        return True, 'sell_profit_p_bear_36_1_1_4'
 
         elif (last_candle['hl_pct_change_24_1h'] > 0.68):
             if (last_candle['moderi_96']):
                 if current_profit >= 0.2:
                     if (last_candle['rsi_14'] < 31.0):
-                        return True, 'sell_profit_p_bull_24_12_1'
+                        return True, 'sell_profit_p_bull_24_1_12_1'
                 elif 0.2 > current_profit >= 0.12:
                     if (last_candle['rsi_14'] < 33.0):
-                        return True, 'sell_profit_p_bull_24_11_1'
+                        return True, 'sell_profit_p_bull_24_1_11_1'
                 elif 0.12 > current_profit >= 0.1:
                     if (last_candle['rsi_14'] < 41.0):
-                        return True, 'sell_profit_p_bull_24_10_1'
+                        return True, 'sell_profit_p_bull_24_1_10_1'
                 elif 0.1 > current_profit >= 0.09:
                     if (last_candle['rsi_14'] < 51.0):
-                        return True, 'sell_profit_p_bull_24_9_1'
+                        return True, 'sell_profit_p_bull_24_1_9_1'
                 elif 0.09 > current_profit >= 0.08:
                     if (last_candle['rsi_14'] < 50.0):
-                        return True, 'sell_profit_p_bull_24_8_1'
+                        return True, 'sell_profit_p_bull_24_1_8_1'
                 elif 0.08 > current_profit >= 0.07:
                     if (last_candle['rsi_14'] < 49.0):
-                        return True, 'sell_profit_p_bull_24_7_1'
+                        return True, 'sell_profit_p_bull_24_1_7_1'
                 elif 0.07 > current_profit >= 0.06:
                     if (last_candle['rsi_14'] < 47.0):
-                        return True, 'sell_profit_p_bull_24_6_1'
+                        return True, 'sell_profit_p_bull_24_1_6_1'
                     elif (last_candle['rsi_14'] < 58.0) and (last_candle['cmf'] < -0.12):
-                        return True, 'sell_profit_p_bull_24_6_3'
+                        return True, 'sell_profit_p_bull_24_1_6_3'
                     elif (last_candle['rsi_14'] < 56.0) and (last_candle['r_14'] == 0):
-                        return True, 'sell_profit_p_bull_24_6_4'
+                        return True, 'sell_profit_p_bull_24_1_6_4'
                 elif 0.06 > current_profit >= 0.05:
                     if (last_candle['rsi_14'] < 45.0):
-                        return True, 'sell_profit_p_bull_24_5_1'
+                        return True, 'sell_profit_p_bull_24_1_5_1'
                     elif (last_candle['rsi_14'] < 56.0) and (last_candle['cmf'] < -0.12):
-                        return True, 'sell_profit_p_bull_24_5_3'
+                        return True, 'sell_profit_p_bull_24_1_5_3'
                     elif (last_candle['rsi_14'] < 54.0) and (last_candle['r_14'] == 0):
-                        return True, 'sell_profit_p_bull_24_5_4'
+                        return True, 'sell_profit_p_bull_24_1_5_4'
                 elif 0.05 > current_profit >= 0.04:
                     if (last_candle['rsi_14'] < 43.0):
-                        return True, 'sell_profit_p_bull_24_4_1'
+                        return True, 'sell_profit_p_bull_24_1_4_1'
                     elif (last_candle['rsi_14'] < 54.0) and (last_candle['cmf'] < -0.12):
-                        return True, 'sell_profit_p_bull_24_4_3'
+                        return True, 'sell_profit_p_bull_24_1_4_3'
                     elif (last_candle['rsi_14'] < 53.0) and (last_candle['r_14'] == 0):
-                        return True, 'sell_profit_p_bull_24_4_4'
+                        return True, 'sell_profit_p_bull_24_1_4_4'
                 elif 0.04 > current_profit >= 0.03:
                     if (last_candle['rsi_14'] < 39.0):
-                        return True, 'sell_profit_p_bull_24_3_1'
+                        return True, 'sell_profit_p_bull_24_1_3_1'
                     elif (last_candle['rsi_14'] < 46.0) and (last_candle['cmf'] < -0.12):
-                        return True, 'sell_profit_p_bull_24_3_3'
+                        return True, 'sell_profit_p_bull_24_1_3_3'
                     elif (last_candle['rsi_14'] < 50.0) and (last_candle['r_14'] == 0):
-                        return True, 'sell_profit_p_bull_24_3_4'
+                        return True, 'sell_profit_p_bull_24_1_3_4'
                 elif 0.03 > current_profit >= 0.02:
                     if (last_candle['rsi_14'] < 35.0):
-                        return True, 'sell_profit_p_bull_24_2_1'
+                        return True, 'sell_profit_p_bull_24_1_2_1'
                     elif (last_candle['rsi_14'] < 44.0) and (last_candle['cmf'] < -0.12):
-                        return True, 'sell_profit_p_bull_24_2_3'
+                        return True, 'sell_profit_p_bull_24_1_2_3'
                     elif (last_candle['rsi_14'] < 48.0) and (last_candle['r_14'] == 0):
-                        return True, 'sell_profit_p_bull_24_2_4'
+                        return True, 'sell_profit_p_bull_24_1_2_4'
                 elif 0.02 > current_profit >= 0.01:
                     if (last_candle['rsi_14'] < 33.0):
-                        return True, 'sell_profit_p_bull_24_1_1'
+                        return True, 'sell_profit_p_bull_24_1_1_1'
                     elif (last_candle['rsi_14'] < 38.0) and (last_candle['cmf'] < -0.12):
-                        return True, 'sell_profit_p_bull_24_1_3'
+                        return True, 'sell_profit_p_bull_24_1_1_3'
                     elif (last_candle['rsi_14'] < 46.0) and (last_candle['r_14'] == 0):
-                        return True, 'sell_profit_p_bull_24_1_4'
+                        return True, 'sell_profit_p_bull_24_1_1_4'
             else:
                 if current_profit >= 0.2:
                     if (last_candle['rsi_14'] < 32.0):
-                        return True, 'sell_profit_p_bear_24_12_1'
+                        return True, 'sell_profit_p_bear_24_1_12_1'
                 elif 0.2 > current_profit >= 0.12:
                     if (last_candle['rsi_14'] < 34.0):
-                        return True, 'sell_profit_p_bear_24_11_1'
+                        return True, 'sell_profit_p_bear_24_1_11_1'
                 elif 0.12 > current_profit >= 0.1:
                     if (last_candle['rsi_14'] < 42.0):
-                        return True, 'sell_profit_p_bear_24_10_1'
+                        return True, 'sell_profit_p_bear_24_1_10_1'
                 elif 0.1 > current_profit >= 0.09:
                     if (last_candle['rsi_14'] < 52.0):
-                        return True, 'sell_profit_p_bear_24_9_1'
+                        return True, 'sell_profit_p_bear_24_1_9_1'
                 elif 0.09 > current_profit >= 0.08:
                     if (last_candle['rsi_14'] < 51.0):
-                        return True, 'sell_profit_p_bear_24_8_1'
+                        return True, 'sell_profit_p_bear_24_1_8_1'
                 elif 0.08 > current_profit >= 0.07:
                     if (last_candle['rsi_14'] < 50.0):
-                        return True, 'sell_profit_p_bear_24_7_1'
+                        return True, 'sell_profit_p_bear_24_1_7_1'
                 elif 0.07 > current_profit >= 0.06:
                     if (last_candle['rsi_14'] < 48.0):
-                        return True, 'sell_profit_p_bear_24_6_1'
+                        return True, 'sell_profit_p_bear_24_1_6_1'
                     elif (last_candle['rsi_14'] < 58.0) and (last_candle['cmf'] < -0.12):
-                        return True, 'sell_profit_p_bear_24_6_3'
+                        return True, 'sell_profit_p_bear_24_1_6_3'
                     elif (last_candle['rsi_14'] < 58.0) and (last_candle['r_14'] == 0):
-                        return True, 'sell_profit_p_bear_24_6_4'
+                        return True, 'sell_profit_p_bear_24_1_6_4'
                 elif 0.06 > current_profit >= 0.05:
                     if (last_candle['rsi_14'] < 46.0):
-                        return True, 'sell_profit_p_bear_24_5_1'
+                        return True, 'sell_profit_p_bear_24_1_5_1'
                     elif (last_candle['rsi_14'] < 56.0) and (last_candle['cmf'] < -0.12):
-                        return True, 'sell_profit_p_bear_24_5_3'
+                        return True, 'sell_profit_p_bear_24_1_5_3'
                     elif (last_candle['rsi_14'] < 56.0) and (last_candle['r_14'] == 0):
-                        return True, 'sell_profit_p_bear_24_5_4'
+                        return True, 'sell_profit_p_bear_24_1_5_4'
                 elif 0.05 > current_profit >= 0.04:
                     if (last_candle['rsi_14'] < 44.0):
-                        return True, 'sell_profit_p_bear_24_4_1'
+                        return True, 'sell_profit_p_bear_24_1_4_1'
                     elif (last_candle['rsi_14'] < 54.0) and (last_candle['cmf'] < -0.12):
-                        return True, 'sell_profit_p_bear_24_4_3'
+                        return True, 'sell_profit_p_bear_24_1_4_3'
                     elif (last_candle['rsi_14'] < 54.0) and (last_candle['r_14'] == 0):
-                        return True, 'sell_profit_p_bear_24_4_4'
+                        return True, 'sell_profit_p_bear_24_1_4_4'
                 elif 0.04 > current_profit >= 0.03:
                     if (last_candle['rsi_14'] < 40.0):
-                        return True, 'sell_profit_p_bear_24_3_1'
+                        return True, 'sell_profit_p_bear_24_1_3_1'
                     elif (last_candle['rsi_14'] < 44.0) and (last_candle['cmf'] < -0.12):
-                        return True, 'sell_profit_p_bear_24_3_3'
+                        return True, 'sell_profit_p_bear_24_1_3_3'
                     elif (last_candle['rsi_14'] < 52.0) and (last_candle['r_14'] == 0):
-                        return True, 'sell_profit_p_bear_24_3_4'
+                        return True, 'sell_profit_p_bear_24_1_3_4'
                 elif 0.03 > current_profit >= 0.02:
                     if (last_candle['rsi_14'] < 36.0):
-                        return True, 'sell_profit_p_bear_24_2_1'
+                        return True, 'sell_profit_p_bear_24_1_2_1'
                     elif (last_candle['rsi_14'] < 42.0) and (last_candle['cmf'] < -0.12):
-                        return True, 'sell_profit_p_bear_24_2_3'
+                        return True, 'sell_profit_p_bear_24_1_2_3'
                     elif (last_candle['rsi_14'] < 50.0) and (last_candle['r_14'] == 0):
-                        return True, 'sell_profit_p_bear_24_2_4'
+                        return True, 'sell_profit_p_bear_24_1_2_4'
                 elif 0.02 > current_profit >= 0.01:
                     if (last_candle['rsi_14'] < 34.0):
-                        return True, 'sell_profit_p_bear_24_1_1'
+                        return True, 'sell_profit_p_bear_24_1_1_1'
                     elif (last_candle['rsi_14'] < 40.0) and (last_candle['cmf'] < -0.12):
-                        return True, 'sell_profit_p_bear_24_1_3'
+                        return True, 'sell_profit_p_bear_24_1_1_3'
                     elif (last_candle['rsi_14'] < 48.0) and (last_candle['r_14'] == 0):
-                        return True, 'sell_profit_p_bear_24_1_4'
+                        return True, 'sell_profit_p_bear_24_1_1_4'
 
         return False, None
 
@@ -2286,6 +2410,73 @@ class NostalgiaForInfinityNextGen(IStrategy):
     def sell_pump_trail(self, current_profit: float, max_profit: float, max_loss: float, last_candle, previous_candle_1, trade: 'Trade', current_time: 'datetime') -> tuple:
         if (0.03 > current_profit > 0.01) and (last_candle['hl_pct_change_6_1h'] > 0.16) and (last_candle['sma_200_dec_20']) and (last_candle['cmf'] < 0.0) and (max_profit > (current_profit + 0.02)) and (last_candle['rsi_14'] < 50.0):
                 return True, 'sell_profit_p_t_1'
+
+        return False, None
+
+    def sell_pump_stoploss(self, current_profit: float, max_profit: float, max_loss: float, last_candle, previous_candle_1, trade: 'Trade', current_time: 'datetime') -> tuple:
+        if (last_candle['hl_pct_change_48_1h'] > 0.9):
+            if (
+                    (-0.04 > current_profit > -0.08)
+                    and (max_profit < 0.005)
+                    and (max_loss < 0.08)
+                    and (last_candle['close'] < last_candle['ema_200'])
+                    and (last_candle['ema_vwma_osc_32'] < 0.0)
+                    and (last_candle['ema_vwma_osc_64'] < 0.0)
+                    and (last_candle['ema_vwma_osc_96'] < 0.0)
+                    and (last_candle['cmf'] < -0.0)
+            ):
+                return True, 'sell_stoploss_p_48_1_1'
+            elif (
+                    (-0.04 > current_profit > -0.08)
+                    and (max_profit < 0.02)
+                    and (max_loss < 0.08)
+                    and (last_candle['close'] < last_candle['ema_200'])
+                    and (last_candle['sma_200_dec_20'])
+                    and (last_candle['ema_vwma_osc_32'] < 0.0)
+                    and (last_candle['ema_vwma_osc_64'] < 0.0)
+                    and (last_candle['ema_vwma_osc_96'] < 0.0)
+                    and (last_candle['cmf'] < -0.0)
+            ):
+                return True, 'sell_stoploss_p_48_1_2'
+
+        elif (last_candle['hl_pct_change_36_1h'] > 0.7):
+            if (
+                    (-0.04 > current_profit > -0.08)
+                    and (max_loss < 0.08)
+                    and (last_candle['close'] < last_candle['ema_200'])
+                    and (last_candle['ema_vwma_osc_32'] < 0.0)
+                    and (last_candle['ema_vwma_osc_64'] < 0.0)
+                    and (last_candle['ema_vwma_osc_96'] < 0.0)
+                    and (last_candle['cmf'] < -0.0)
+            ):
+                return True, 'sell_stoploss_p_36_1_1'
+
+        elif (last_candle['hl_pct_change_36_1h'] > 0.5):
+            if (
+                    (-0.05 > current_profit > -0.08)
+                    and (max_loss < 0.08)
+                    and (last_candle['close'] < last_candle['ema_200'])
+                    and (last_candle['ema_vwma_osc_32'] < 0.0)
+                    and (last_candle['ema_vwma_osc_64'] < 0.0)
+                    and (last_candle['ema_vwma_osc_96'] < 0.0)
+                    and (last_candle['cmf'] < -0.0)
+                    and (max_profit > (current_profit + 0.1))
+                    and (last_candle['rsi_14'] < 40.0)
+            ):
+                return True, 'sell_stoploss_p_36_2_1'
+
+        elif (last_candle['hl_pct_change_24_1h'] > 0.6):
+            if (
+                    (-0.04 > current_profit > -0.08)
+                    and (max_loss < 0.08)
+                    and (last_candle['close'] < last_candle['ema_200'])
+                    and (last_candle['ema_vwma_osc_32'] < 0.0)
+                    and (last_candle['ema_vwma_osc_64'] < 0.0)
+                    and (last_candle['ema_vwma_osc_96'] < 0.0)
+                    and (last_candle['cmf'] < -0.0)
+            ):
+                return True, 'sell_stoploss_p_24_1_1'
+
 
         return False, None
 
@@ -2353,6 +2544,11 @@ class NostalgiaForInfinityNextGen(IStrategy):
 
         # The pair is pumped, trailing
         sell, signal_name = self.sell_pump_trail(current_profit, max_profit, max_loss, last_candle, previous_candle_1, trade, current_time)
+        if sell and (signal_name is not None):
+            return f"{signal_name} ( {buy_tag})"
+
+        # The pair is pumped, stoploss
+        sell, signal_name = self.sell_pump_stoploss(current_profit, max_profit, max_loss, last_candle, previous_candle_1, trade, current_time)
         if sell and (signal_name is not None):
             return f"{signal_name} ( {buy_tag})"
 
@@ -2561,6 +2757,11 @@ class NostalgiaForInfinityNextGen(IStrategy):
         dataframe['moderi_32'] = moderi(dataframe, 32)
         dataframe['moderi_64'] = moderi(dataframe, 64)
         dataframe['moderi_96'] = moderi(dataframe, 96)
+
+        # EMA of VWMA Oscillator
+        dataframe['ema_vwma_osc_32'] = ema_vwma_osc(dataframe, 32)
+        dataframe['ema_vwma_osc_64'] = ema_vwma_osc(dataframe, 64)
+        dataframe['ema_vwma_osc_96'] = ema_vwma_osc(dataframe, 96)
 
         # EWO
         dataframe['ewo'] = ewo(dataframe, 50, 200)
@@ -3161,6 +3362,11 @@ def vwma(dataframe: DataFrame, length: int = 10):
 def moderi(dataframe: DataFrame, len_slow_ma: int = 32) -> Series:
     slow_ma = Series(ta.EMA(vwma(dataframe, length=len_slow_ma), timeperiod=len_slow_ma))
     return slow_ma >= slow_ma.shift(1)  # we just need true & false for ERI trend
+
+# Exponential moving average of a volume weighted simple moving average
+def ema_vwma_osc(dataframe, len_slow_ma):
+    slow_ema = Series(ta.EMA(vwma(dataframe, len_slow_ma), len_slow_ma))
+    return ((slow_ema - slow_ema.shift(1)) / slow_ema.shift(1)) * 100
 
 def pivot_points(dataframe: DataFrame, mode = 'fibonacci') -> Series:
     hlc3_pivot = (dataframe['high'] + dataframe['low'] + dataframe['close']).shift(1) / 3
