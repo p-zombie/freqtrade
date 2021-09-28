@@ -1,0 +1,5 @@
+#!/bin/bash
+# mv docker-prune /etc/cron.daily
+log=/var/lib/docker/prune.log
+date +'=== %Y.%m.%d %H:%M ===' >> $log
+docker system prune -af --filter "until=$((30*24))h" >> $log
