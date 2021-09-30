@@ -477,11 +477,11 @@ class NostalgiaForInfinityNextGen(IStrategy):
             "safe_dips_threshold_2"     : 0.07,
             "safe_dips_threshold_12"    : 0.26,
             "safe_dips_threshold_144"   : 0.38,
-            "safe_pump_6h_threshold"    : 0.2,
-            "safe_pump_12h_threshold"   : 0.3,
-            "safe_pump_24h_threshold"   : 0.5,
-            "safe_pump_36h_threshold"   : 0.6,
-            "safe_pump_48h_threshold"   : 0.9,
+            "safe_pump_6h_threshold"    : 0.45,
+            "safe_pump_12h_threshold"   : None,
+            "safe_pump_24h_threshold"   : None,
+            "safe_pump_36h_threshold"   : None,
+            "safe_pump_48h_threshold"   : None,
             "btc_1h_not_downtrend"      : False,
             "close_over_pivot_type"     : "none", # pivot, sup1, sup2, sup3, res1, res2, res3
             "close_over_pivot_offset"   : 1.0,
@@ -1084,75 +1084,6 @@ class NostalgiaForInfinityNextGen(IStrategy):
                 and (last_candle['r_480'] < -97.0)
         ):
             return True, 'signal_stoploss_u_e_b_2'
-
-        # Under EMA200, pair and BTC negative, low max rate
-        if (
-                (-0.04 > current_profit > -0.07)
-                and (last_candle['ema_vwma_osc_32'] < 0.0)
-                and (last_candle['ema_vwma_osc_64'] < 0.0)
-                and (max_profit < 0.005)
-                and (max_loss < 0.07)
-                and (last_candle['sma_200_dec_24'])
-                and (last_candle['close'] < last_candle['ema_200'])
-                and (last_candle['ema_25'] < last_candle['ema_50'])
-                and (last_candle['cmf'] < -0.0)
-                and (last_candle['r_480'] < -50.0)
-                and (last_candle['btc_not_downtrend_1h'] == False)
-        ):
-            return True, 'sell_stoploss_u_e_b_3'
-
-
-        # Under EMA200, pair & BTC negative, low max rate, short trade duration
-        if (
-                (-0.04 > current_profit > -0.09)
-                and (max_profit < 0.005)
-                and (max_loss < 0.09)
-                and (last_candle['close'] < last_candle['ema_200'])
-                and (last_candle['ema_25'] < last_candle['ema_50'])
-                and (last_candle['ema_vwma_osc_32'] < 0.0 )
-                and (last_candle['ema_vwma_osc_64'] < 0.0)
-                and (last_candle['ema_vwma_osc_96'] < 0.0)
-                and (last_candle['cmf'] < -0.1)
-                and (last_candle['r_480'] < -75.0)
-                and (last_candle['close'] < last_candle['sup_level_1h'])
-                and (current_time - timedelta(minutes=60) < trade.open_date_utc)
-                and (last_candle['btc_not_downtrend_1h'] == False)
-        ):
-            return True, 'sell_stoploss_u_e_b_4'
-
-        # Under EMA200, pair & BTC negative, low max rate, short trade duration
-        if (
-                (-0.04 > current_profit > -0.09)
-                and (max_profit < 0.015)
-                and (max_loss < 0.09)
-                and (last_candle['close'] < last_candle['ema_200'])
-                and (last_candle['ema_25'] < last_candle['ema_50'])
-                and (last_candle['ema_vwma_osc_32'] < 0.0 )
-                and (last_candle['ema_vwma_osc_64'] < 0.0)
-                and (last_candle['ema_vwma_osc_96'] < 0.0)
-                and (last_candle['cmf'] < -0.2)
-                and (last_candle['close'] < last_candle['sup_level_1h'])
-                and (current_time - timedelta(minutes=180) < trade.open_date_utc)
-                and (last_candle['btc_not_downtrend_1h'] == False)
-        ):
-            return True, 'sell_stoploss_u_e_b_5'
-
-        # Under EMA200, pair & BTC negative, low max rate, short trade duration
-        if (
-                (-0.04 > current_profit > -0.1)
-                and (max_profit < 0.015)
-                and (last_candle['close'] < last_candle['ema_200'])
-                and (last_candle['ema_25'] < last_candle['ema_50'])
-                and (last_candle['ema_vwma_osc_32'] < 0.0 )
-                and (last_candle['ema_vwma_osc_64'] < 0.0)
-                and (last_candle['ema_vwma_osc_96'] < 0.0)
-                and (last_candle['cmf'] < -0.25)
-                and (last_candle['r_480'] < -75.0)
-                and (last_candle['close'] < last_candle['sup_level_1h'])
-                and (current_time - timedelta(minutes=60) < trade.open_date_utc)
-                and (last_candle['btc_not_downtrend_1h'] == False)
-        ):
-            return True, 'sell_stoploss_u_e_b_6'
 
         return False, None
 
@@ -3760,12 +3691,11 @@ class NostalgiaForInfinityNextGen(IStrategy):
 
                     # Logic
                     item_buy_logic.append(dataframe['ema_26'] > dataframe['ema_12'])
-                    item_buy_logic.append((dataframe['ema_26'] - dataframe['ema_12']) > (dataframe['open'] * 0.024))
+                    item_buy_logic.append((dataframe['ema_26'] - dataframe['ema_12']) > (dataframe['open'] * 0.026))
                     item_buy_logic.append((dataframe['ema_26'].shift() - dataframe['ema_12'].shift()) > (dataframe['open'] / 100))
                     item_buy_logic.append(dataframe['close'] < dataframe['ema_20'] * 0.942)
-                    item_buy_logic.append(dataframe['rsi_14'] < 25.5)
-                    item_buy_logic.append(dataframe['crsi'] > 8.0)
-                    item_buy_logic.append(dataframe['r_480_1h'] > -75.0)
+                    item_buy_logic.append(dataframe['rsi_14'] < 28.2)
+                    item_buy_logic.append(dataframe['crsi'] > 10.0)
 
                 # Condition #11 - Semi swing. Deep local dip. Mild uptrend.
                 elif index == 11:
