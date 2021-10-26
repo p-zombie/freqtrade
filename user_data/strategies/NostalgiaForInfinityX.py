@@ -210,6 +210,7 @@ class NostalgiaForInfinityX(IStrategy):
         "buy_condition_28_enable": True,
         "buy_condition_29_enable": True,
         "buy_condition_30_enable": True,
+        "buy_condition_31_enable": True,
         #############
     }
 
@@ -1057,6 +1058,34 @@ class NostalgiaForInfinityX(IStrategy):
             "safe_pump_36h_threshold"   : None,
             "safe_pump_48h_threshold"   : None,
             "btc_1h_not_downtrend"      : True,
+            "close_over_pivot_type"     : "none", # pivot, sup1, sup2, sup3, res1, res2, res3
+            "close_over_pivot_offset"   : 1.0,
+            "close_under_pivot_type"    : "none", # pivot, sup1, sup2, sup3, res1, res2, res3
+            "close_under_pivot_offset"  : 1.0
+        },
+        31: {
+            "ema_fast"                  : False,
+            "ema_fast_len"              : "50",
+            "ema_slow"                  : False,
+            "ema_slow_len"              : "50",
+            "close_above_ema_fast"      : False,
+            "close_above_ema_fast_len"  : "200",
+            "close_above_ema_slow"      : False,
+            "close_above_ema_slow_len"  : "200",
+            "sma200_rising"             : False,
+            "sma200_rising_val"         : "30",
+            "sma200_1h_rising"          : False,
+            "sma200_1h_rising_val"      : "50",
+            "safe_dips_threshold_0"     : 0.024,
+            "safe_dips_threshold_2"     : 0.09,
+            "safe_dips_threshold_12"    : 0.26,
+            "safe_dips_threshold_144"   : 0.44,
+            "safe_pump_6h_threshold"    : 0.5,
+            "safe_pump_12h_threshold"   : None,
+            "safe_pump_24h_threshold"   : None,
+            "safe_pump_36h_threshold"   : None,
+            "safe_pump_48h_threshold"   : None,
+            "btc_1h_not_downtrend"      : False,
             "close_over_pivot_type"     : "none", # pivot, sup1, sup2, sup3, res1, res2, res3
             "close_over_pivot_offset"   : 1.0,
             "close_under_pivot_type"    : "none", # pivot, sup1, sup2, sup3, res1, res2, res3
@@ -3158,6 +3187,48 @@ class NostalgiaForInfinityX(IStrategy):
 
         return False, None
 
+    def sell_long_mode(self, current_profit: float, max_profit:float, max_loss:float, last_candle, previous_candle_1, previous_candle_2, previous_candle_3, previous_candle_4, previous_candle_5, trade: 'Trade', current_time: 'datetime', buy_tag) -> tuple:
+        # Original sell signals
+        sell, signal_name = self.sell_signals(current_profit, max_profit, max_loss, last_candle, previous_candle_1, previous_candle_2, previous_candle_3, previous_candle_4, previous_candle_5, trade, current_time, buy_tag)
+        if sell and (signal_name is not None):
+            return True, signal_name
+
+        # Stoplosses
+        sell, signal_name = self.sell_stoploss(current_profit, max_profit, max_loss, last_candle, previous_candle_1, trade, current_time)
+        if sell and (signal_name is not None):
+            return True, signal_name
+
+        if (0.0 < current_profit <= 0.02) and (max_profit - current_profit > 0.03) and (last_candle['cmf'] < 0.0):
+            return True, 'sell_long_t_0'
+        elif (0.02 < current_profit <= 0.04) and (max_profit - current_profit > 0.03) and (last_candle['cmf'] < 0.0):
+            return True, 'sell_long_t_1'
+        elif (0.04 < current_profit <= 0.06) and (max_profit - current_profit > 0.035) and (last_candle['cmf'] < 0.0):
+            return True, 'sell_long_t_2'
+        elif (0.06 < current_profit <= 0.08) and (max_profit - current_profit > 0.04) and (last_candle['cmf'] < 0.0):
+            return True, 'sell_long_t_3'
+        elif (0.08 < current_profit <= 0.1) and (max_profit - current_profit > 0.045) and (last_candle['cmf'] < 0.0):
+            return True, 'sell_long_t_4'
+        elif (0.1 < current_profit <= 0.12) and (max_profit - current_profit > 0.05) and (last_candle['cmf'] < 0.0):
+            return True, 'sell_long_t_5'
+        elif (0.12 < current_profit <= 0.14) and (max_profit - current_profit > 0.055) and (last_candle['cmf'] < 0.0):
+            return True, 'sell_long_t_6'
+        elif (0.14 < current_profit <= 0.16) and (max_profit - current_profit > 0.06) and (last_candle['cmf'] < 0.0):
+            return True, 'sell_long_t_7'
+        elif (0.16 < current_profit <= 0.18) and (max_profit - current_profit > 0.065) and (last_candle['cmf'] < 0.0):
+            return True, 'sell_long_t_8'
+        elif (0.18 < current_profit <= 0.2) and (max_profit - current_profit > 0.07) and (last_candle['cmf'] < 0.0):
+            return True, 'sell_long_t_8'
+        elif (0.2 < current_profit <= 0.3) and (max_profit - current_profit > 0.075) and (last_candle['cmf'] < 0.0):
+            return True, 'sell_long_t_9'
+        elif (0.3 < current_profit <= 0.4) and (max_profit - current_profit > 0.08) and (last_candle['cmf'] < 0.0):
+            return True, 'sell_long_t_10'
+        elif (0.4 < current_profit <= 0.5) and (max_profit - current_profit > 0.085) and (last_candle['cmf'] < 0.0):
+            return True, 'sell_long_t_11'
+        elif (0.5 < current_profit <= 1.0) and (max_profit - current_profit > 0.09) and (last_candle['cmf'] < 0.0):
+            return True, 'sell_long_t_12'
+
+        return False, None
+
     def custom_sell(self, pair: str, trade: 'Trade', current_time: 'datetime', current_rate: float,
                     current_profit: float, **kwargs):
         dataframe, _ = self.dp.get_analyzed_dataframe(pair, self.timeframe)
@@ -3174,6 +3245,14 @@ class NostalgiaForInfinityX(IStrategy):
         buy_tags = buy_tag.split()
         max_profit = ((trade.max_rate - trade.open_rate) / trade.open_rate)
         max_loss = ((trade.open_rate - trade.min_rate) / trade.min_rate)
+
+        # Long mode
+        if all(c in ['31',] for c in buy_tags):
+            sell, signal_name = self.sell_long_mode(current_profit, max_profit, max_loss, last_candle, previous_candle_1, previous_candle_2, previous_candle_3, previous_candle_4, previous_candle_5, trade, current_time, buy_tag)
+            if sell and (signal_name is not None):
+                return f"{signal_name} ( {buy_tag})"
+            # Skip remaining sell logic for long mode
+            return None
 
         # Original sell signals
         sell, signal_name = self.sell_signals(current_profit, max_profit, max_loss, last_candle, previous_candle_1, previous_candle_2, previous_candle_3, previous_candle_4, previous_candle_5, trade, current_time, buy_tag)
@@ -4030,6 +4109,20 @@ class NostalgiaForInfinityX(IStrategy):
                     item_buy_logic.append((dataframe['ema_26'] - dataframe['ema_12']) > (dataframe['open'] * 0.02))
                     item_buy_logic.append((dataframe['ema_26'].shift() - dataframe['ema_12'].shift()) > (dataframe['open'] / 100))
                     item_buy_logic.append(dataframe['close'] < (dataframe['bb20_2_low'] * 0.98))
+
+                # Condition #31 - Long mode. Local dip.
+                elif index == 31:
+                    # Non-Standard protections
+
+                    # Logic
+                    item_buy_logic.append(dataframe['bb40_2_low'].shift().gt(0))
+                    item_buy_logic.append(dataframe['bb40_2_delta'].gt(dataframe['close'] * 0.045))
+                    item_buy_logic.append(dataframe['closedelta'].gt(dataframe['close'] * 0.028))
+                    item_buy_logic.append(dataframe['tail'].lt(dataframe['bb40_2_delta'] * 0.25))
+                    item_buy_logic.append(dataframe['close'].lt(dataframe['bb40_2_low'].shift()))
+                    item_buy_logic.append(dataframe['close'].le(dataframe['close'].shift()))
+                    item_buy_logic.append(dataframe['cti'] < -0.9)
+                    item_buy_logic.append(dataframe['crsi_1h'] > 10.0)
 
                 item_buy_logic.append(dataframe['volume'] > 0)
                 item_buy = reduce(lambda x, y: x & y, item_buy_logic)
