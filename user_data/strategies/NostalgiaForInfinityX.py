@@ -3675,6 +3675,7 @@ class NostalgiaForInfinityX(IStrategy):
         # Assign tf to each pair so they can be downloaded and cached for strategy.
         informative_pairs = [(pair, self.info_timeframe_1h) for pair in pairs]
         informative_pairs.extend([(pair, self.info_timeframe_1d) for pair in pairs])
+        informative_pairs.extend([(pair, self.info_timeframe_15m) for pair in pairs])
 
         if self.config['stake_currency'] in ['USDT','BUSD','USDC','DAI','TUSD','PAX','USD','EUR','GBP']:
             btc_info_pair = f"BTC/{self.config['stake_currency']}"
@@ -3682,8 +3683,9 @@ class NostalgiaForInfinityX(IStrategy):
             btc_info_pair = "BTC/USDT"
 
         informative_pairs.append((btc_info_pair, self.timeframe))
-        informative_pairs.append((btc_info_pair, self.info_timeframe_1h))
         informative_pairs.append((btc_info_pair, self.info_timeframe_1d))
+        informative_pairs.append((btc_info_pair, self.info_timeframe_1h))
+        informative_pairs.append((btc_info_pair, self.info_timeframe_15m))
         return informative_pairs
 
     def informative_1d_indicators(self, dataframe: DataFrame, metadata: dict) -> DataFrame:
