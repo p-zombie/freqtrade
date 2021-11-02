@@ -123,8 +123,9 @@ class NostalgiaForInfinityX(IStrategy):
     # Optimal timeframe for the strategy.
     timeframe = '5m'
     res_timeframe = 'none'
-    info_timeframe_1h = '1h'
     info_timeframe_1d = '1d'
+    info_timeframe_1h = '1h'
+    info_timeframe_15m = '15m'
 
     # BTC informative
     has_BTC_base_tf = False
@@ -220,6 +221,7 @@ class NostalgiaForInfinityX(IStrategy):
         "buy_condition_38_enable": True,
         "buy_condition_39_enable": True,
         "buy_condition_40_enable": True,
+        "buy_condition_41_enable": True,
         #############
     }
 
@@ -1347,6 +1349,34 @@ class NostalgiaForInfinityX(IStrategy):
             "safe_pump_36h_threshold"   : None,
             "safe_pump_48h_threshold"   : None,
             "btc_1h_not_downtrend"      : False,
+            "close_over_pivot_type"     : "none", # pivot, sup1, sup2, sup3, res1, res2, res3
+            "close_over_pivot_offset"   : 1.0,
+            "close_under_pivot_type"    : "none", # pivot, sup1, sup2, sup3, res1, res2, res3
+            "close_under_pivot_offset"  : 1.0
+        },
+        41: {
+            "ema_fast"                  : False,
+            "ema_fast_len"              : "12",
+            "ema_slow"                  : False,
+            "ema_slow_len"              : "12",
+            "close_above_ema_fast"      : False,
+            "close_above_ema_fast_len"  : "200",
+            "close_above_ema_slow"      : False,
+            "close_above_ema_slow_len"  : "200",
+            "sma200_rising"             : False,
+            "sma200_rising_val"         : "42",
+            "sma200_1h_rising"          : False,
+            "sma200_1h_rising_val"      : "50",
+            "safe_dips_threshold_0"     : 0.018,
+            "safe_dips_threshold_2"     : 0.08,
+            "safe_dips_threshold_12"    : 0.2,
+            "safe_dips_threshold_144"   : None,
+            "safe_pump_6h_threshold"    : 0.5,
+            "safe_pump_12h_threshold"   : None,
+            "safe_pump_24h_threshold"   : None,
+            "safe_pump_36h_threshold"   : None,
+            "safe_pump_48h_threshold"   : 3.2,
+            "btc_1h_not_downtrend"      : True,
             "close_over_pivot_type"     : "none", # pivot, sup1, sup2, sup3, res1, res2, res3
             "close_over_pivot_offset"   : 1.0,
             "close_under_pivot_type"    : "none", # pivot, sup1, sup2, sup3, res1, res2, res3
@@ -3760,6 +3790,43 @@ class NostalgiaForInfinityX(IStrategy):
 
         return informative_1h
 
+    def informative_15m_indicators(self, dataframe: DataFrame, metadata: dict) -> DataFrame:
+        tik = time.perf_counter()
+        assert self.dp, "DataProvider is required for multiple timeframes."
+        # Get the informative pair
+        informative_15m = self.dp.get_pair_dataframe(pair=metadata['pair'], timeframe=self.info_timeframe_15m)
+
+        # RSI
+        informative_15m['rsi_14'] = ta.RSI(informative_15m, timeperiod=14)
+
+        # EMAs
+        informative_15m['ema_12'] = ta.EMA(informative_15m, timeperiod=12)
+        informative_15m['ema_20'] = ta.EMA(informative_15m, timeperiod=20)
+        informative_15m['ema_26'] = ta.EMA(informative_15m, timeperiod=25)
+        informative_15m['ema_50'] = ta.EMA(informative_15m, timeperiod=50)
+        informative_15m['ema_100'] = ta.EMA(informative_15m, timeperiod=100)
+        informative_15m['ema_200'] = ta.EMA(informative_15m, timeperiod=200)
+
+        # SMA
+        informative_15m['sma_200'] = ta.SMA(informative_15m, timeperiod=200)
+
+        # BB
+        bollinger = qtpylib.bollinger_bands(qtpylib.typical_price(informative_15m), window=20, stds=2)
+        informative_15m['bb20_2_low'] = bollinger['lower']
+        informative_15m['bb20_2_mid'] = bollinger['mid']
+        informative_15m['bb20_2_upp'] = bollinger['upper']
+
+        # CMF
+        informative_15m['cmf'] = chaikin_money_flow(informative_15m, 20)
+
+        # CTI
+        informative_15m['cti'] = pta.cti(informative_15m["close"], length=20)
+
+        tok = time.perf_counter()
+        log.debug(f"[{metadata['pair']}] informative_1h_indicators took: {tok - tik:0.4f} seconds.")
+
+        return informative_15m
+
     def normal_tf_indicators(self, dataframe: DataFrame, metadata: dict) -> DataFrame:
         tik = time.perf_counter()
 
@@ -3970,6 +4037,11 @@ class NostalgiaForInfinityX(IStrategy):
             drop_columns = [f"{s}_{self.info_timeframe_1h}" for s in ['date']]
             dataframe.drop(columns=dataframe.columns.intersection(drop_columns), inplace=True)
 
+        if self.info_timeframe_15m != 'none':
+            informative_15m = self.informative_15m_indicators(dataframe, metadata)
+            dataframe = merge_informative_pair(dataframe, informative_15m, self.timeframe, self.info_timeframe_15m, ffill=True)
+            drop_columns = [f"{s}_{self.info_timeframe_15m}" for s in ['date']]
+            dataframe.drop(columns=dataframe.columns.intersection(drop_columns), inplace=True)
 
         '''
         --> Resampled to another timeframe
@@ -4540,6 +4612,17 @@ class NostalgiaForInfinityX(IStrategy):
                     item_buy_logic.append(dataframe['rsi_14'] < 32.0)
                     item_buy_logic.append(dataframe['r_14'] < -90.0)
                     item_buy_logic.append(dataframe['r_64'] < -80.0)
+
+                # Condition #41 - 15m. Semi swing. Local dip. BTC not downtrend.
+                elif index == 41:
+                    # Non-Standard protections
+                    item_buy_logic.append(dataframe['ema_12_15m'] > dataframe['ema_200_1h'])
+
+                    # Logic
+                    item_buy_logic.append(dataframe['ema_26_15m'] > dataframe['ema_12_15m'])
+                    item_buy_logic.append((dataframe['ema_26_15m'] - dataframe['ema_12_15m']) > (dataframe['open_15m'] * 0.03))
+                    item_buy_logic.append((dataframe['ema_26_15m'].shift(3) - dataframe['ema_12_15m'].shift(3)) > (dataframe['open_15m'] / 100))
+                    item_buy_logic.append(dataframe['close_15m'] < (dataframe['bb20_2_low_15m'] * 0.99))
 
                 item_buy_logic.append(dataframe['volume'] > 0)
                 item_buy = reduce(lambda x, y: x & y, item_buy_logic)
