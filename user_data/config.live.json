@@ -1,8 +1,8 @@
 {
-    "strategy": "NostalgiaForInfinityNext",
+    "strategy": "NostalgiaForInfinityX",
     "db_url": "sqlite:////freqtrade/user_data/db/nfi.live.sqlite",
     "dry_run": false,
-    "timeframe": "5m",
+    "timeframe": "15m",
     "max_open_trades": 5,
     "stake_currency": "USDT",
     "stake_amount": "unlimited",
