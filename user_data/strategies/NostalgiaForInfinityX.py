@@ -94,7 +94,7 @@ else:
 ##                                                                                                       ##
 ##               REFERRAL LINKS                                                                          ##
 ##                                                                                                       ##
-##  Binance: https://accounts.binance.com/en/register?ref=37365811                                       ##
+##  Binance: https://accounts.binance.com/en/register?ref=EAZC47FM (Lifetime 5% cashback on fees)        ##
 ##  Kucoin: https://www.kucoin.com/ucenter/signup?rcode=rJTLZ9K                                          ##
 ##  Huobi: https://www.huobi.com/en-us/topic/double-reward/?invite_code=ubpt2223                         ##
 ##  Gate.io: https://www.gate.io/signup/8054544                                                          ##
@@ -3556,7 +3556,7 @@ class NostalgiaForInfinityX(IStrategy):
         elif 0.06 > current_profit >= 0.05:
             if (max_profit > (current_profit + 0.03)) and (last_candle['rsi_14'] < 43.0):
                 return True, 'sell_profit_t_5_1'
-            elif (max_profit > (current_profit + 0.0)) and (last_candle['rsi_14'] < 45.0) and (last_candle['cmf'] < -0.0) and (last_candle['cmf_1h'] < -0.0):
+            elif (max_profit > (current_profit + 0.055)) and (last_candle['rsi_14'] < 45.0) and (last_candle['cmf'] < -0.0) and (last_candle['cmf_1h'] < -0.0):
                 return True, 'sell_profit_t_5_2'
             elif (max_profit > (current_profit + 0.055)) and (last_candle['sma_200_dec_20']) and (last_candle['cmf_1h'] < -0.0):
                 return True, 'sell_profit_t_5_3'
