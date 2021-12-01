@@ -2220,10 +2220,9 @@ class NostalgiaForInfinityX(IStrategy):
                 and (last_candle['cmf'] < -0.0)
                 and (last_candle['cmf_15m'] < -0.0)
                 and (last_candle['cmf_1h'] < -0.0)
+                and (current_time - timedelta(minutes=2880) > trade.open_date_utc)
             ):
-            if (-0.14 <= current_profit < -0.1) and (current_time - timedelta(minutes=2880) > trade.open_date_utc):
-                return True, 'sell_stoploss_0'
-            elif (-0.2 <= current_profit < -0.14):
+            if (-0.2 <= current_profit < -0.14):
                 return True, 'sell_stoploss_1'
             elif (current_profit < -0.2):
                 return True, 'sell_stoploss_2'
@@ -7335,7 +7334,7 @@ class NostalgiaForInfinityX(IStrategy):
                     item_buy_logic.append(dataframe['rsi_14'] < 28.5)
                     item_buy_logic.append(dataframe['cti'] < -0.75)
                     item_buy_logic.append(dataframe['rsi_14_1h'] < 80.0)
-                    item_buy_logic.append(dataframe['cti_1h'] < 0.62)
+                    item_buy_logic.append(dataframe['cti_1h'] < 0.4)
 
                 # Condition #16 - Semi swing. Cross above.
                 elif index == 16:
