@@ -3,7 +3,7 @@
     "db_url": "sqlite:////freqtrade/user_data/db/nfi.live.sqlite",
     "dry_run": false,
     "timeframe": "5m",
-    "max_open_trades": 5,
+    "max_open_trades": 7,
     "stake_currency": "USDT",
     "stake_amount": "unlimited",
     "tradable_balance_ratio": 0.5,
