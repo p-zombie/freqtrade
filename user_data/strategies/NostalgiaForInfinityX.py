@@ -107,7 +107,7 @@ class NostalgiaForInfinityX(IStrategy):
     INTERFACE_VERSION = 2
 
     def version(self) -> str:
-        return "v11.0.28"
+        return "v11.0.30"
 
     # ROI table:
     minimal_roi = {
@@ -2303,7 +2303,7 @@ class NostalgiaForInfinityX(IStrategy):
             if (current_profit > -0.03):
                 return None
         elif (count_of_buys == 2):
-            if (current_profit > -0.08) or (last_candle['close'] < previous_candle['close']) or (last_candle['btc_not_downtrend_1h'] == False):
+            if (current_profit > -0.08) or (last_candle['close'] < previous_candle['close']):
                 return None
         elif (count_of_buys == 3):
             if (current_profit > -0.1) or (last_candle['tpct_change_12'] > 0.05) or (last_candle['close'] < previous_candle['close']) or (last_candle['btc_not_downtrend_1h'] == False):
@@ -8444,7 +8444,7 @@ class NostalgiaForInfinityX(IStrategy):
         if hasattr(trade, 'select_filled_orders'):
             filled_buys = trade.select_filled_orders('buy')
             count_of_buys = len(filled_buys)
-            if count_of_buys > 0:
+            if count_of_buys > 1:
                 initial_buy = filled_buys[0]
                 max_profit = ((trade.max_rate - initial_buy.average) / initial_buy.average)
                 max_loss = ((initial_buy.average - trade.min_rate) / trade.min_rate)
