@@ -107,7 +107,7 @@ class NostalgiaForInfinityX(IStrategy):
     INTERFACE_VERSION = 2
 
     def version(self) -> str:
-        return "v11.0.116"
+        return "v11.0.117"
 
     # ROI table:
     minimal_roi = {
@@ -8628,7 +8628,6 @@ class NostalgiaForInfinityX(IStrategy):
         informative_pairs = [(pair, self.info_timeframe_1h) for pair in pairs]
         informative_pairs.extend([(pair, self.info_timeframe_1d) for pair in pairs])
         informative_pairs.extend([(pair, self.info_timeframe_15m) for pair in pairs])
-        print(informative_pairs)
 
         if self.config['stake_currency'] in ['USDT','BUSD','USDC','DAI','TUSD','PAX','USD','EUR','GBP']:
             btc_info_pair = f"BTC/{self.config['stake_currency']}"
@@ -8639,7 +8638,6 @@ class NostalgiaForInfinityX(IStrategy):
         informative_pairs.append((btc_info_pair, self.info_timeframe_1d))
         informative_pairs.append((btc_info_pair, self.info_timeframe_1h))
         informative_pairs.append((btc_info_pair, self.info_timeframe_15m))
-        print(informative_pairs)
         return informative_pairs
 
     def informative_1d_indicators(self, dataframe: DataFrame, metadata: dict) -> DataFrame:
@@ -9073,7 +9071,6 @@ class NostalgiaForInfinityX(IStrategy):
 
         if self.has_BTC_daily_tf:
             btc_daily_tf = self.dp.get_pair_dataframe(btc_info_pair, '1d')
-            print(btc_daily_tf)
             btc_daily_tf = self.daily_tf_btc_indicators(btc_daily_tf, metadata)
             dataframe = merge_informative_pair(dataframe, btc_daily_tf, self.timeframe, '1d', ffill=True)
             drop_columns = [f"{s}_1d" for s in ['date', 'open', 'high', 'low', 'close', 'volume']]
@@ -9715,7 +9712,7 @@ class NostalgiaForInfinityX(IStrategy):
                     item_buy_logic.append(dataframe['close'] > (dataframe['sup_level_1h'] * 0.92))
 
                     # Logic
-                    item_buy_logic.append(dataframe['ewo_15m'] > 7.8)
+                    item_buy_logic.append(dataframe['ewo_15m'] > 5.4)
                     item_buy_logic.append(dataframe['rsi_14_15m'] < 36.0)
                     item_buy_logic.append(dataframe['cti_15m'] < -0.9)
                     item_buy_logic.append(dataframe['r_14_15m'] < -90.0)
