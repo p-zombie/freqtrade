@@ -1,6 +1,6 @@
 # Freqtrade
 Automatically deploy freqtrade to a remote Docker host and auto update strategies.
-I've been using it to automatically deploy to vultr, but you can use it in any provider of your choice, as longs as you have a docker host running.
+I've been using it to automatically deploy to vultr, but you can use it with any provider of your choice, as long as you have a docker host running.
 
 ### Requirements
 * First of all, you need a docker host to deploy the app, like https://www.vultr.com/docs/one-click-docker/ or any other provider you want.
