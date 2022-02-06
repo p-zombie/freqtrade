@@ -5,8 +5,6 @@ ENV PYTHONWARNINGS="ignore"
 ENV PIP_CACHE_DIR="/home/ftuser/.cache"
 ENV PYTHONUSERBASE="/home/ftuser/.local"
 
-
-
 USER root
 RUN curl -sL https://deb.nodesource.com/setup_12.x | sudo -E bash -
 RUN apt-get update && apt-get -y upgrade
@@ -25,7 +23,6 @@ RUN --mount=type=cache,mode=0755,target=/home/ftuser/.cache pip install -r /freq
 COPY load_env.sh /freqtrade/load_env.sh
 COPY Procfile /freqtrade/Procfile
 COPY user_data /freqtrade/user_data
-
 
 USER ftuser
 ENTRYPOINT ["./load_env.sh"]
