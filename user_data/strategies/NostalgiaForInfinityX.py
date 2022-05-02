@@ -115,7 +115,7 @@ class NostalgiaForInfinityX(IStrategy):
     INTERFACE_VERSION = 2
 
     def version(self) -> str:
-        return "v11.0.635"
+        return "v11.0.637"
 
     # ROI table:
     minimal_roi = {
@@ -522,7 +522,7 @@ class NostalgiaForInfinityX(IStrategy):
             "close_above_ema_slow_len"  : "200",
             "sma200_rising"             : False,
             "sma200_rising_val"         : "28",
-            "sma200_1h_rising"          : True,
+            "sma200_1h_rising"          : False,
             "sma200_1h_rising_val"      : "24",
             "safe_dips_threshold_0"     : 0.028,
             "safe_dips_threshold_2"     : 0.09,
@@ -2580,16 +2580,6 @@ class NostalgiaForInfinityX(IStrategy):
         is_rebuy = count_of_buys > 2
         is_leverage = bool(re.match(leverage_pattern,trade.pair))
         stop_index = 0 if is_rebuy and not is_leverage else 1 if not is_rebuy and not is_leverage else 2
-        if (
-                (current_profit < [-0.5, -0.5, -0.5][stop_index])
-                and (last_candle['close'] < last_candle['ema_200'])
-                and (last_candle['close'] < (last_candle['ema_200'] - last_candle['atr']))
-                and (last_candle['sma_200_dec_20'])
-                and (last_candle['cmf'] < -0.0)
-                # temporary
-                and (trade.open_date_utc.replace(tzinfo=None) > datetime(2022, 2, 20) or is_backtest)
-        ):
-            return True, 'sell_stoploss_doom_1'
 
         if (
                 (current_profit < [-0.25, -0.25, -0.25][stop_index])
@@ -2601,7 +2591,7 @@ class NostalgiaForInfinityX(IStrategy):
                 # temporary
                 and (trade.open_date_utc.replace(tzinfo=None) >= datetime(2022, 4, 26) or is_backtest)
         ):
-            return True, 'sell_stoploss_doom_2'
+            return True, 'sell_stoploss_doom_1'
 
         return False, None
 
@@ -9906,15 +9896,14 @@ class NostalgiaForInfinityX(IStrategy):
                 elif index == 9:
                     # Non-Standard protections
                     item_buy_logic.append(dataframe['ema_50_1h'] > dataframe['ema_100_1h'])
-                    item_buy_logic.append(dataframe['close'] > (dataframe['sup_level_1h'] * 0.934))
+                    item_buy_logic.append(dataframe['close'] > (dataframe['sup_level_1h'] * 0.86))
 
                     # Logic
                     item_buy_logic.append(dataframe['close'] < dataframe['sma_30'] * 0.97)
-                    item_buy_logic.append(dataframe['cti'] < -0.95)
-                    item_buy_logic.append(dataframe['ewo'] < -4.8)
+                    item_buy_logic.append(dataframe['cti'] < -0.9)
+                    item_buy_logic.append(dataframe['ewo'] < -4.0)
                     item_buy_logic.append(dataframe['cti_1h'] < -0.75)
                     item_buy_logic.append(dataframe['crsi_1h'] > 8.0)
-                    item_buy_logic.append(dataframe['volume_mean_12'] > (dataframe['volume_mean_24'] * 0.75))
 
                 # Condition #10 - Semi swing. Local dip.
                 elif index == 10:
