@@ -49,7 +49,7 @@ jobs:
           cache-to: type=local,dest=/tmp/.buildx-cache-new
 
       - name: Start Deployment
-        uses: wshihadeh/docker-deployment-action@master
+        uses: joaorafaelm/docker-deployment-action@master
         with:
           remote_docker_host: ${{ secrets.DOCKER_HOST }}
           ssh_private_key: ${{ secrets.DOCKER_SSH_PRIVATE_KEY }}
@@ -60,7 +60,7 @@ jobs:
           stack_file_name: production.yml
           pull_images_first: true
           keep_files: 3
-          docker_prune: true
+          docker_prune: true 
           args: up -d --force-recreate
 
       - name: Notify telegram
