@@ -1,6 +1,6 @@
 {
     "strategy": "NostalgiaForInfinityX",
-    "db_url": "sqlite:////freqtrade/user_data/db/nfi.live.sqlite",
+    "db_url": "sqlite:////freqtrade/user_data/db/nfi.dry.sqlite",
     "dry_run": true,
     "timeframe": "5m",
     "max_open_trades": 5,
