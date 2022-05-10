@@ -60,6 +60,7 @@ jobs:
           stack_file_name: production.yml
           pull_images_first: true
           keep_files: 3
+          pre_deployment_command_args: down --rmi all --remove-orphans
           args: up -d --force-recreate
 
       - name: Notify telegram
