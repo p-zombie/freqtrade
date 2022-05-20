@@ -115,7 +115,7 @@ class NostalgiaForInfinityX(IStrategy):
     INTERFACE_VERSION = 2
 
     def version(self) -> str:
-        return "v11.0.853"
+        return "v11.0.854"
 
     # ROI table:
     minimal_roi = {
@@ -184,7 +184,7 @@ class NostalgiaForInfinityX(IStrategy):
     rebuy_multi_2 = 1.0
 
     # Profit maximizer
-    profit_max_enabled = False
+    profit_max_enabled = True
 
     # Run "populate_indicators()" only for new candle.
     process_only_new_candles = True
@@ -9091,8 +9091,8 @@ class NostalgiaForInfinityX(IStrategy):
 
     def sell_profit_target(self, pair: str, trade: Trade, current_time: datetime, current_rate: float, current_profit: float, last_candle, previous_candle_1, previous_rate, previous_profit,  previous_sell_reason, previous_time_profit_reached) -> tuple:
         if self.profit_max_enabled:
-            if (previous_sell_reason == "sell_stoploss_u_e_1"):
-                if (current_profit < (previous_profit - 0.01)):
+            if (previous_sell_reason in ["sell_stoploss_u_e_1", "sell_stoploss_doom"]):
+                if (current_profit < (previous_profit - 0.005)):
                     return True, previous_sell_reason
             elif (current_profit < (previous_profit - 0.005)):
                 return True, previous_sell_reason
@@ -9213,6 +9213,10 @@ class NostalgiaForInfinityX(IStrategy):
             sell_max, signal_name_max = self.sell_profit_target(pair, trade, current_time, current_rate, current_profit, last_candle, previous_candle_1, previous_rate, previous_profit, previous_sell_reason, previous_time_profit_reached)
             if sell_max and signal_name_max is not None:
                 return f"{signal_name_max}_m ( {buy_tag})"
+            if (current_profit > (previous_profit + 0.025)):
+                pair, mark_signal = self.mark_profit_target(pair, True, previous_sell_reason, trade, current_time, current_rate, current_profit, last_candle, previous_candle_1)
+                if pair:
+                    self._set_profit_target(pair, mark_signal, current_rate, current_profit, current_time)
 
         if sell and signal_name is not None:
             pair, mark_signal = self.mark_profit_target(pair, sell, signal_name, trade, current_time, current_rate, current_profit, last_candle, previous_candle_1)
@@ -9221,7 +9225,8 @@ class NostalgiaForInfinityX(IStrategy):
 
         if (
                 (not self.profit_max_enabled)
-                or (current_profit < 0.025)
+                # Enable profit maximizer for the stoplosses
+                or (signal_name not in ["sell_stoploss_u_e_1", "sell_stoploss_doom"])
         ):
             if sell and (signal_name is not None):
                 return f"{signal_name} ( {buy_tag})"
