@@ -115,7 +115,7 @@ class NostalgiaForInfinityX(IStrategy):
     INTERFACE_VERSION = 2
 
     def version(self) -> str:
-        return "v11.0.1021"
+        return "v11.0.1022"
 
     # ROI table:
     minimal_roi = {
@@ -9766,6 +9766,8 @@ class NostalgiaForInfinityX(IStrategy):
         dataframe['tpct_change_2']   = self.top_percent_change(dataframe,2)
         dataframe['tpct_change_12']  = self.top_percent_change(dataframe,12)
         dataframe['tpct_change_144'] = self.top_percent_change(dataframe,144)
+        # 3 hours, protect against wicks
+        dataframe['hl_pct_change_36'] = self.range_percent_change(dataframe, 'HL', 36)
 
         if not self.config['runmode'].value in ('live', 'dry_run'):
             # Backtest age filter
@@ -11764,6 +11766,7 @@ class NostalgiaForInfinityX(IStrategy):
                 elif index == 33:
                     # Non-Standard protections
                     item_buy_logic.append(dataframe['close'] > (dataframe['sup_level_1h'] * 0.9))
+                    item_buy_logic.append(dataframe['hl_pct_change_36'] < 1.0)
 
                     # Logic
                     item_buy_logic.append(dataframe['close'] < (dataframe['ema_16'] * 0.93))
