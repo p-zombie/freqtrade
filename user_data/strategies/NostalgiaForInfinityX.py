@@ -115,7 +115,7 @@ class NostalgiaForInfinityX(IStrategy):
     INTERFACE_VERSION = 3
 
     def version(self) -> str:
-        return "v11.0.1253"
+        return "v11.0.1254"
 
     # ROI table:
     minimal_roi = {
@@ -167,36 +167,43 @@ class NostalgiaForInfinityX(IStrategy):
     coin_metrics['current_whitelist'] = []
 
     # Rebuy feature
-    position_adjustment_enable = False
+    position_adjustment_enable = True
     rebuy_mode = 0
     max_rebuy_orders_0 = 4
     max_rebuy_orders_1 = 1
     max_rebuy_orders_2 = 10
     max_rebuy_orders_3 = 8
     max_rebuy_orders_4 = 3
+    max_rebuy_orders_5 = 2
     max_rebuy_multiplier_lev = 0.5 # for leveraged tokens
     max_rebuy_multiplier_0 = 1.0
     max_rebuy_multiplier_1 = 1.0
     max_rebuy_multiplier_2 = 0.2
     max_rebuy_multiplier_3 = 0.05
     max_rebuy_multiplier_4 = 0.1
+    max_rebuy_multiplier_5 = 0.35
     rebuy_pcts_n_0 = (-0.04, -0.06, -0.09, -0.12)
     rebuy_pcts_n_1 = (-0.07, -0.09)
     rebuy_pcts_n_2 = (-0.02, -0.025, -0.025, -0.03, -0.04, -0.045, -0.05, -0.055, -0.06, -0.08)
     rebuy_pcts_p_2 = (0.02, 0.025, 0.025, 0.03, 0.07, 0.075, 0.08, 0.085, 0.09, 0.095)
     rebuy_pcts_n_3 = (-0.02, -0.04, -0.06, -0.08, -0.1, -0.12, -0.14, -0.16)
     rebuy_pcts_n_4 = (-0.02, -0.06, -0.1)
+    rebuy_pcts_n_5 = (-0.1, -0.14)
     rebuy_multi_0 = 0.15
     rebuy_multi_1 = 0.35
     rebuy_multi_2 = 1.0
     rebuy_multi_3 = 1.0
     rebuy_multi_4 = 1.0
+    rebuy_multi_5 = 1.0
 
     # Profit maximizer
     profit_max_enabled = True
 
     # Rapid more tags
     rapid_mode_tags = ['66', '67', '68', '69', '70', '71', '72']
+
+    # Half mode tags
+    half_mode_tags = ['73']
 
     # Run "populate_indicators()" only for new candle.
     process_only_new_candles = True
@@ -288,6 +295,8 @@ class NostalgiaForInfinityX(IStrategy):
         "buy_condition_70_enable": True,
         "buy_condition_71_enable": True,
         "buy_condition_72_enable": True,
+
+        "buy_condition_73_enable": True,
         #############
     }
 
@@ -2288,6 +2297,34 @@ class NostalgiaForInfinityX(IStrategy):
             "close_over_pivot_offset"   : 1.0,
             "close_under_pivot_type"    : "none", # pivot, sup1, sup2, sup3, res1, res2, res3
             "close_under_pivot_offset"  : 1.0
+         },
+        73: {
+            "ema_fast"                  : False,
+            "ema_fast_len"              : "26",
+            "ema_slow"                  : False,
+            "ema_slow_len"              : "12",
+            "close_above_ema_fast"      : False,
+            "close_above_ema_fast_len"  : "200",
+            "close_above_ema_slow"      : False,
+            "close_above_ema_slow_len"  : "200",
+            "sma200_rising"             : False,
+            "sma200_rising_val"         : "48",
+            "sma200_1h_rising"          : False,
+            "sma200_1h_rising_val"      : "48",
+            "safe_dips_threshold_0"     : 0.032,
+            "safe_dips_threshold_2"     : 0.12,
+            "safe_dips_threshold_12"    : 0.36,
+            "safe_dips_threshold_144"   : 0.48,
+            "safe_pump_6h_threshold"    : 0.6,
+            "safe_pump_12h_threshold"   : None,
+            "safe_pump_24h_threshold"   : 0.8,
+            "safe_pump_36h_threshold"   : None,
+            "safe_pump_48h_threshold"   : 1.2,
+            "btc_1h_not_downtrend"      : False,
+            "close_over_pivot_type"     : "none", # pivot, sup1, sup2, sup3, res1, res2, res3
+            "close_over_pivot_offset"   : 1.0,
+            "close_under_pivot_type"    : "none", # pivot, sup1, sup2, sup3, res1, res2, res3
+            "close_under_pivot_offset"  : 1.0
          }
     }
 
@@ -2507,9 +2544,9 @@ class NostalgiaForInfinityX(IStrategy):
                 use_mode = self.config['rebuy_mode']
             if ('use_alt_rebuys' in self.config and self.config['use_alt_rebuys']):
                 use_mode = 1
-            is_leverage = bool(re.match(leverage_pattern,pair))
-            if (is_leverage) and not ('do_not_use_leverage_rebuys' in self.config and self.config['do_not_use_leverage_rebuys']):
-                return proposed_stake * self.max_rebuy_multiplier_lev
+            enter_tags = entry_tag.split()
+            if all(c in self.half_mode_tags for c in enter_tags):
+                use_mode = 5
             if (use_mode == 0):
                 return proposed_stake * self.max_rebuy_multiplier_0
             elif (use_mode == 1):
@@ -2520,26 +2557,14 @@ class NostalgiaForInfinityX(IStrategy):
                 return proposed_stake * self.max_rebuy_multiplier_3
             elif (use_mode == 4):
                 return proposed_stake * self.max_rebuy_multiplier_4
+            elif (use_mode == 5):
+                return proposed_stake * self.max_rebuy_multiplier_5
 
         return proposed_stake
 
     def adjust_trade_position(self, trade: Trade, current_time: datetime,
                               current_rate: float, current_profit: float, min_stake: float,
                               max_stake: float, **kwargs):
-        """
-        Custom trade adjustment logic, returning the stake amount that a trade should be increased.
-        This means extra buy orders with additional fees.
-
-        :param trade: trade object.
-        :param current_time: datetime object, containing the current datetime
-        :param current_rate: Current buy rate.
-        :param current_profit: Current profit (as ratio), calculated based on current_rate.
-        :param min_stake: Minimal stake size allowed by exchange.
-        :param max_stake: Balance available for trading.
-        :param **kwargs: Ensure to keep this here so updates to this won't break your strategy.
-        :return float: Stake amount to adjust your trade
-        """
-
         # Don't rebuy for trades on hold
         if self._should_hold_trade(trade, current_rate, 'none'):
             return None
@@ -2567,7 +2592,7 @@ class NostalgiaForInfinityX(IStrategy):
         # simple TA checks, to assure that the price is not dropping rapidly
         if (
                 # drop in the last candle
-                ((last_candle['tpct_change_0'] > 0.018) and (last_candle['close'] < last_candle['open']))
+               (last_candle['tpct_change_0'] > 0.018)
         ):
             return None
 
@@ -2603,6 +2628,12 @@ class NostalgiaForInfinityX(IStrategy):
 
         if use_alt:
             use_mode = 1
+
+        if all(c in self.half_mode_tags for c in enter_tags):
+            use_mode = 5
+
+        if (use_mode in [0, 1, 2, 3, 4]):
+            return None
 
         is_rebuy = False
 
@@ -2701,6 +2732,21 @@ class NostalgiaForInfinityX(IStrategy):
                         )
                 ):
                     is_rebuy = True
+        elif (use_mode == 5):
+            if (count_of_entries == 1):
+                if (
+                        (current_profit < self.rebuy_pcts_n_5[count_of_entries - 1])
+                        and (last_candle['close_max_48'] < (last_candle['close'] * 1.05))
+                        and (last_candle['btc_pct_close_max_72_5m'] < 1.03)
+                ):
+                    is_rebuy = True
+            elif (2 <= count_of_entries <= self.max_rebuy_orders_5):
+                if (
+                        (current_profit < self.rebuy_pcts_n_5[count_of_entries - 1])
+                        and (last_candle['close_max_48'] < (last_candle['close'] * 1.05))
+                        and (last_candle['btc_pct_close_max_72_5m'] < 1.03)
+                ):
+                    is_rebuy = True
 
         if not is_rebuy:
             return None
@@ -2741,7 +2787,9 @@ class NostalgiaForInfinityX(IStrategy):
                     elif (count_of_entries == 8):
                         stake_amount = stake_amount * self.rebuy_multi_3 * 4
                 elif (use_mode == 4):
-                      stake_amount = stake_amount + (stake_amount * (self.rebuy_multi_4 * (count_of_entries - 1)))
+                    stake_amount = stake_amount + (stake_amount * (self.rebuy_multi_4 * (count_of_entries - 1)))
+                elif (use_mode == 5):
+                    stake_amount = stake_amount * self.rebuy_multi_5
                 return stake_amount
             except Exception as exception:
                 return None
@@ -9466,6 +9514,16 @@ class NostalgiaForInfinityX(IStrategy):
 
         return False, None
 
+    def sell_half_mode(self, trade: Trade, current_time: datetime, current_profit: float, max_profit:float, last_candle, previous_candle_1) -> tuple:
+        is_leverage = bool(re.match(leverage_pattern, trade.pair))
+        stop_index = 0 if  not is_leverage else 1
+        if (
+                (current_profit < [-0.25, -0.30][stop_index])
+        ):
+            return True, 'sell_stoploss_hlf_stop_1'
+
+        return False, None
+
     def mark_profit_target(self, pair: str, sell: bool, signal_name: str, trade: Trade, current_time: datetime, current_rate: float, current_profit: float, last_candle, previous_candle_1) -> tuple:
         if self.profit_max_enabled:
             if sell and (signal_name is not None):
@@ -9478,7 +9536,7 @@ class NostalgiaForInfinityX(IStrategy):
             if (previous_sell_reason in ["sell_stoploss_u_e_1"]):
                 if (current_profit < (previous_profit - 0.005)):
                     return True, previous_sell_reason
-            elif (previous_sell_reason in ["sell_stoploss_doom_1", "sell_stoploss_stop_1", "sell_stoploss_rpd_stop_1"]):
+            elif (previous_sell_reason in ["sell_stoploss_doom_1", "sell_stoploss_stop_1", "sell_stoploss_rpd_stop_1", "sell_stoploss_hlf_stop_1"]):
                 if (current_profit < (previous_profit - 0.005)):
                     return True, previous_sell_reason
             elif all(c in self.rapid_mode_tags for c in enter_tags):
@@ -9499,6 +9557,28 @@ class NostalgiaForInfinityX(IStrategy):
                         return True, previous_sell_reason
                 elif (0.12 <= current_profit):
                     if ((current_profit < (previous_profit - 0.05)) or (last_candle['rsi_14'] > 85.0)):
+                        return True, previous_sell_reason
+            elif all(c in self.half_mode_tags for c in enter_tags):
+                if (0.001 <= current_profit < 0.01):
+                    if ((current_profit < (previous_profit - 0.005)) or (last_candle['rsi_14'] > 90.0)):
+                        return True, previous_sell_reason
+                elif (0.01 <= current_profit < 0.02):
+                    if ((current_profit < (previous_profit - 0.01)) or (last_candle['rsi_14'] > 90.0)):
+                        return True, previous_sell_reason
+                elif (0.02 <= current_profit < 0.03):
+                    if ((current_profit < (previous_profit - 0.02)) or (last_candle['rsi_14'] > 90.0)):
+                        return True, previous_sell_reason
+                elif (0.03 <= current_profit < 0.05):
+                    if ((current_profit < (previous_profit - 0.025)) or (last_candle['rsi_14'] > 90.0)):
+                        return True, previous_sell_reason
+                elif (0.05 <= current_profit < 0.08):
+                    if ((current_profit < (previous_profit - 0.025)) or (last_candle['rsi_14'] > 90.0)):
+                        return True, previous_sell_reason
+                elif (0.08 <= current_profit < 0.12):
+                    if ((current_profit < (previous_profit - 0.025)) or (last_candle['rsi_14'] > 90.0)):
+                        return True, previous_sell_reason
+                elif (0.12 <= current_profit):
+                    if ((current_profit < (previous_profit - 0.03)) or (last_candle['rsi_14'] > 90.0)):
                         return True, previous_sell_reason
             elif (previous_sell_reason in ["sell_profit_maximizer_01"]) and (current_profit >= 0.01):
                 if (last_candle['rsi_14'] > 81.0):
@@ -9595,6 +9675,11 @@ class NostalgiaForInfinityX(IStrategy):
             if all(c in self.rapid_mode_tags for c in enter_tags):
                 sell, signal_name = self.sell_rapid_mode(trade, current_time, current_profit, max_profit, last_candle, previous_candle_1)
 
+        # Half mode sells
+        if not sell:
+            if all(c in self.half_mode_tags for c in enter_tags):
+                sell, signal_name = self.sell_half_mode(trade, current_time, current_profit, max_profit, last_candle, previous_candle_1)
+
         # Original sell signals
         if not sell:
             sell, signal_name = self.sell_signals(current_profit, max_profit, max_loss, last_candle, previous_candle_1, previous_candle_2, previous_candle_3, previous_candle_4, previous_candle_5, trade, current_time, enter_tag)
@@ -9684,7 +9769,8 @@ class NostalgiaForInfinityX(IStrategy):
                 (not self.profit_max_enabled)
                 # Enable profit maximizer for the stoplosses
                 or (
-                    (signal_name not in ["sell_profit_maximizer_01", "sell_stoploss_u_e_1", "sell_stoploss_doom_1", "sell_stoploss_stop_1", "sell_stoploss_rpd_stop_1"])
+                    (signal_name not in ["sell_profit_maximizer_01", "sell_stoploss_u_e_1", "sell_stoploss_doom_1", "sell_stoploss_stop_1", "sell_stoploss_rpd_stop_1", "sell_stoploss_hlf_stop_1"])
+                    and (not all(c in self.half_mode_tags for c in enter_tags))
                 )
         ):
             if sell and (signal_name is not None):
@@ -15763,6 +15849,70 @@ class NostalgiaForInfinityX(IStrategy):
                         | (dataframe['close'] < dataframe['ema_20'] * 0.95)
                         | (dataframe['close'] < dataframe['bb20_2_low'] * 0.99)
                         | ((dataframe['ema_26'] - dataframe['ema_12']) > (dataframe['open'] * 0.028))
+                    )
+
+                # Condition #73 - Half mode.
+                elif index == 73:
+                    # Non-Standard protections
+                    item_buy_logic.append(dataframe['close_max_48'] < (dataframe['close'] * 1.1))
+                    item_buy_logic.append(dataframe['btc_pct_close_max_24_5m'] < 1.03)
+                    item_buy_logic.append(dataframe['btc_pct_close_max_72_5m'] < 1.03)
+                    item_buy_logic.append(dataframe['hl_pct_change_36'] < 0.5)
+
+                    # Logic
+                    item_buy_logic.append(dataframe['close'] < dataframe['vwap_lowerband'])
+                    item_buy_logic.append(dataframe['bb20_width_1h'] > 0.15) # 0.131
+                    #item_buy_logic.append(dataframe['rsi_14'] < 30.0)
+                    item_buy_logic.append(dataframe['r_14'] < -50.0)
+                    item_buy_logic.append(dataframe['r_96'] < -50.0)
+                    item_buy_logic.append(dataframe['cti'] < -0.8) # -0.85
+                    item_buy_logic.append(dataframe['close'] < (dataframe['bb20_2_low'] * 0.985))
+                    #item_buy_logic.append(dataframe['r_14_1h'] < -50.0)
+                    #item_buy_logic.append(dataframe['cti_1h'] < -0.75)
+                    item_buy_logic.append(
+                        (dataframe['cmf'] > 0.1)
+                        | (dataframe['mfi'] > 40.0)
+                        | (dataframe['rsi_14'] < 15.0)
+                        | (dataframe['cti'] < -0.9)
+                        | (dataframe['rsi_14_1h'] < 25.0)
+                        | (dataframe['crsi_1h'] > 16.0)
+                        | (dataframe['tpct_change_144'] < 0.12)
+                        | (dataframe['hl_pct_change_48_1h'] < 0.2)
+                        | (dataframe['btc_pct_close_max_72_5m'] < 1.01)
+                        | (dataframe['sma_200'] > dataframe['sma_200'].shift(24))
+                        | (dataframe['ema_200'] > (dataframe['ema_200'].shift(12) * 1.01))
+                        | (dataframe['close'] > (dataframe['sma_200'] * 0.95))
+                        | (dataframe['close'] < dataframe['ema_20'] * 0.94)
+                        | (dataframe['close'] < dataframe['bb20_2_low'] * 0.98)
+                        | ((dataframe['ema_26'] - dataframe['ema_12']) > (dataframe['open'] * 0.016))
+                    )
+                    item_buy_logic.append(
+                        (dataframe['cmf'] > -0.2)
+                        | (dataframe['mfi'] > 30.0)
+                        | (dataframe['cti'] < -0.95)
+                        | (dataframe['cti_1h'] < -0.9)
+                        | (dataframe['rsi_14_1h'] < 20.0)
+                        | (dataframe['crsi_1h'] > 40.0)
+                        | (dataframe['close_max_48'] < (dataframe['close'] * 1.04))
+                        | (dataframe['ema_200'] > (dataframe['ema_200'].shift(12) * 1.01))
+                        | (dataframe['close'] < dataframe['ema_20'] * 0.95)
+                        | (dataframe['close'] < dataframe['bb20_2_low'] * 0.978)
+                        | ((dataframe['ema_26'] - dataframe['ema_12']) > (dataframe['open'] * 0.012))
+                    )
+                    item_buy_logic.append(
+                        (dataframe['cmf'] > -0.1)
+                        | (dataframe['mfi'] > 30.0)
+                        | (dataframe['rsi_14'] < 25.0)
+                        | (dataframe['cti'] < -0.9)
+                        | (dataframe['cti_1h'] < -0.5)
+                        | (dataframe['rsi_14_1h'] < 50.0)
+                        | (dataframe['crsi_1h'] > 50.0)
+                        | (dataframe['close_max_48'] < (dataframe['close'] * 1.05))
+                        | (dataframe['hl_pct_change_48_1h'] < 0.3)
+                        | (dataframe['ema_200'] > (dataframe['ema_200'].shift(12) * 1.01))
+                        | (dataframe['close'] < dataframe['ema_20'] * 0.95)
+                        | (dataframe['close'] < dataframe['bb20_2_low'] * 0.982)
+                        | ((dataframe['ema_26'] - dataframe['ema_12']) > (dataframe['open'] * 0.01))
                     )
 
                 item_buy_logic.append(dataframe['volume'] > 0)
