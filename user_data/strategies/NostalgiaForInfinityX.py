@@ -115,7 +115,8 @@ class NostalgiaForInfinityX(IStrategy):
     INTERFACE_VERSION = 3
 
     def version(self) -> str:
-        return "v11.0.1263"
+        return "v11.0.1265"
+
 
     # ROI table:
     minimal_roi = {
@@ -9473,7 +9474,7 @@ class NostalgiaForInfinityX(IStrategy):
                 if (current_profit < (previous_profit - 0.005)):
                     return True, previous_sell_reason
             elif all(c in self.rapid_mode_tags for c in enter_tags):
-                if (0.001 <= current_profit < 0.01):
+                if (current_profit < 0.01):
                     if ((current_profit < (previous_profit - 0.005)) or (last_candle['rsi_14'] > 90.0)):
                         return True, previous_sell_reason
                 elif (0.01 <= current_profit < 0.02):
@@ -15059,6 +15060,7 @@ class NostalgiaForInfinityX(IStrategy):
                     # Non-Standard protections
                     item_buy_logic.append(dataframe['close_max_48'] >= (dataframe['close'] * 1.125 ))
                     item_buy_logic.append(dataframe['close_max_288'] >= (dataframe['close'] * 1.225 ))
+                    item_buy_logic.append(dataframe['hl_pct_change_36'] < 0.5)
 
                     # Logic
                     item_buy_logic.append(dataframe['kama'] > dataframe['fama'])
