@@ -115,7 +115,7 @@ class NostalgiaForInfinityX(IStrategy):
     INTERFACE_VERSION = 3
 
     def version(self) -> str:
-        return "v11.0.1303"
+        return "v11.0.1305"
 
 
     # ROI table:
@@ -2618,21 +2618,12 @@ class NostalgiaForInfinityX(IStrategy):
         if hasattr(trade, 'enter_tag') and trade.enter_tag is not None:
             enter_tag = trade.enter_tag
         enter_tags = enter_tag.split()
-        # No rebuys for rapid mode
-        if all(c in self.rapid_mode_tags for c in enter_tags):
-            return None
 
         dataframe, _ = self.dp.get_analyzed_dataframe(trade.pair, self.timeframe)
         if(len(dataframe) < 2):
             return None
         last_candle = dataframe.iloc[-1].squeeze()
         previous_candle = dataframe.iloc[-2].squeeze()
-        # simple TA checks, to assure that the price is not dropping rapidly
-        if (
-                # drop in the last candle
-               (last_candle['tpct_change_0'] > 0.018)
-        ):
-            return None
 
         count_of_entries = 0
         if (hasattr(trade, 'enter_side')):
