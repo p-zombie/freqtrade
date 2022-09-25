@@ -117,7 +117,7 @@ class NostalgiaForInfinityX(IStrategy):
     INTERFACE_VERSION = 3
 
     def version(self) -> str:
-        return "v11.2.232"
+        return "v11.2.234"
 
 
     # ROI table:
@@ -9526,12 +9526,12 @@ class NostalgiaForInfinityX(IStrategy):
         dataframe, _ = self.dp.get_analyzed_dataframe(pair, self.timeframe)
         if(len(dataframe) < 6):
             return None
-        last_candle = dataframe.iloc[-1]
-        previous_candle_1 = dataframe.iloc[-2]
-        previous_candle_2 = dataframe.iloc[-3]
-        previous_candle_3 = dataframe.iloc[-4]
-        previous_candle_4 = dataframe.iloc[-5]
-        previous_candle_5 = dataframe.iloc[-6]
+        last_candle = dataframe.iloc[-1].squeeze()
+        previous_candle_1 = dataframe.iloc[-2].squeeze()
+        previous_candle_2 = dataframe.iloc[-3].squeeze()
+        previous_candle_3 = dataframe.iloc[-4].squeeze()
+        previous_candle_4 = dataframe.iloc[-5].squeeze()
+        previous_candle_5 = dataframe.iloc[-6].squeeze()
 
         enter_tag = 'empty'
         if hasattr(trade, 'enter_tag') and trade.enter_tag is not None:
@@ -13225,7 +13225,7 @@ class NostalgiaForInfinityX(IStrategy):
                         (dataframe['cmf'] > 0.2)
                         | (dataframe['rsi_14'] < 20.0)
                         | (dataframe['cti'] < -0.8)
-                        | (dataframe['ewo'] > 3.0)
+                        | (dataframe['ewo'] > 3.4)
                         | (dataframe['cti_1h'] < 0.0)
                         | (dataframe['rsi_14_1h'] < 50.0)
                         | (dataframe['r_14_1h'] < -75.0)
@@ -13233,7 +13233,7 @@ class NostalgiaForInfinityX(IStrategy):
                         | (dataframe['close_max_48'] < (dataframe['close'] * 1.05))
                         | (dataframe['hl_pct_change_48_1h'] < 0.3)
                         | (dataframe['close'] < (dataframe['res1_1d'] * 1.0))
-                        | (dataframe['close'] < dataframe['ema_20'] * 0.96)
+                        | (dataframe['close'] < dataframe['ema_20'] * 0.95)
                         | (dataframe['close'] < dataframe['bb20_2_low'] * 0.975)
                         | ((dataframe['ema_26'] - dataframe['ema_12']) > (dataframe['open'] * 0.01))
                         | (dataframe['close_15m'] < (dataframe['bb20_2_low_15m'] * 0.999))
