@@ -116,7 +116,7 @@ class NostalgiaForInfinityX(IStrategy):
     INTERFACE_VERSION = 3
 
     def version(self) -> str:
-        return "v11.3.24"
+        return "v11.3.25"
 
 
     # ROI table:
@@ -201,6 +201,9 @@ class NostalgiaForInfinityX(IStrategy):
     rebuy_multi_3 = 1.0
     rebuy_multi_4 = 1.0
     rebuy_multi_5 = 1.0
+
+    # BTC/ETH stakes
+    btc_stakes = ['BTC','ETH']
 
     # Stop thresholds
     # 1 entry, more than 1, leveraged
@@ -2950,7 +2953,7 @@ class NostalgiaForInfinityX(IStrategy):
         is_rebuy = count_of_buys > 2
         is_leverage = bool(re.match(leverage_pattern,trade.pair))
         stop_index = 0 if is_rebuy and not is_leverage else 1 if not is_rebuy and not is_leverage else 2
-        is_btc_stake = self.config['stake_currency'] in ['BTC','ETH']
+        is_btc_stake = self.config['stake_currency'] in self.btc_stakes
 
         # Absolute limit, just in case...
         if (
@@ -17408,7 +17411,11 @@ class NostalgiaForInfinityX(IStrategy):
                         )
                         | (dataframe['close'] < dataframe['sma_30'] * 0.95)
                         | (dataframe['close'] < dataframe['ema_20'] * 0.97)
-                        | (dataframe['close'] < dataframe['bb20_2_low'] * 0.99)
+                        |
+                        (
+                            (dataframe['close'] < dataframe['bb20_2_low'] * 0.99)
+                            & (dataframe['ema_200_pct_change_288'] < 0.16)
+                        )
                         | ((dataframe['ema_26'] - dataframe['ema_12']) > (dataframe['open'] * 0.02))
                         | (dataframe['close_15m'] < (dataframe['bb20_2_low_15m'] * 0.99))
                         |
