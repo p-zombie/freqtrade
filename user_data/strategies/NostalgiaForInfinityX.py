@@ -101,12 +101,13 @@ else:
 ##                                                                                                         ##
 ##               REFERRAL LINKS                                                                            ##
 ##                                                                                                         ##
-##  Binance: https://accounts.binance.com/en/register?ref=EAZC47FM (5% discount on trading fees)           ##
+##  Binance: https://accounts.binance.com/en/register?ref=C68K26A9 (20% discount on trading fees)          ##
 ##  Kucoin: https://www.kucoin.com/r/af/QBSSS5J2 (20% lifetime discount on trading fees)                   ##
-##  Gate.io: https://www.gate.io/signup/8054544 (10% discount on trading fees)                             ##
-##  OKX: https://www.okx.com/join/11749725760 (5% discount on trading fees)                                ##
+##  Gate.io: https://www.gate.io/signup/8054544 (20% discount on trading fees)                             ##
+##  OKX: https://www.okx.com/join/11749725931 (20% discount on trading fees)                               ##
 ##  ByBit: https://partner.bybit.com/b/nfi                                                                 ##
 ##  Huobi: https://www.huobi.com/en-us/v/register/double-invite/?inviter_id=11345710&invite_code=ubpt2223  ##
+##         (20% discount on trading fees)                                                                  ##
 ##  Bitvavo: https://account.bitvavo.com/create?a=D22103A4BC (no fees for the first € 1000)                ##
 #############################################################################################################
 
@@ -116,7 +117,7 @@ class NostalgiaForInfinityX(IStrategy):
     INTERFACE_VERSION = 3
 
     def version(self) -> str:
-        return "v11.3.65"
+        return "v11.3.66"
 
 
     # ROI table:
@@ -21363,7 +21364,11 @@ class NostalgiaForInfinityX(IStrategy):
                         )
                     )
                     item_buy_logic.append(
-                        (dataframe['cmf'] > 0.0)
+                        (
+                            (dataframe['cmf'] > 0.0)
+                            & (dataframe['ema_200_pct_change_144'] < 0.16)
+                            & (dataframe['close_max_48'] < (dataframe['close'] * 1.24))
+                        )
                         | (dataframe['mfi'] > 40.0)
                         | (dataframe['rsi_14'] < 22.0)
                         |
@@ -21396,7 +21401,12 @@ class NostalgiaForInfinityX(IStrategy):
                         | (dataframe['close'] < dataframe['sma_30'] * 0.86)
                         | (dataframe['close'] < dataframe['ema_20'] * 0.89)
                         | (dataframe['close'] < dataframe['bb20_2_low'] * 0.98)
-                        | ((dataframe['ema_26'] - dataframe['ema_12']) > (dataframe['open'] * 0.048))
+                        |
+                        (
+                            ((dataframe['ema_26'] - dataframe['ema_12']) > (dataframe['open'] * 0.048))
+                            & (dataframe['ema_200_pct_change_144'] < 0.16)
+                            & (dataframe['close_max_48'] < (dataframe['close'] * 1.24))
+                        )
                         | (dataframe['close_15m'] < (dataframe['bb20_2_low_15m'] * 0.98))
                         | ((dataframe['ema_26_15m'] - dataframe['ema_12_15m']) > (dataframe['open_15m'] * 0.02))
                         | (dataframe['rsi_14_15m'] < 30.0)
