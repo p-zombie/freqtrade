@@ -117,7 +117,7 @@ class NostalgiaForInfinityX(IStrategy):
     INTERFACE_VERSION = 3
 
     def version(self) -> str:
-        return "v11.3.74"
+        return "v11.3.75"
 
 
     # ROI table:
@@ -9674,7 +9674,7 @@ class NostalgiaForInfinityX(IStrategy):
             sell_max, signal_name_max = self.sell_profit_target(pair, trade, current_time, current_rate, current_profit, last_candle, previous_candle_1, previous_rate, previous_profit, previous_sell_reason, previous_time_profit_reached, enter_tags)
             if sell_max and signal_name_max is not None:
                 return f"{signal_name_max}_m ( {enter_tag})"
-            if (current_profit > (previous_profit + 0.03)):
+            if (current_profit > (previous_profit + 0.03)) and (previous_sell_reason not in ["sell_stoploss_stop_2"]):
                 # Update the target, raise it.
                 mark_pair, mark_signal = self.mark_profit_target(pair, True, previous_sell_reason, trade, current_time, current_rate, current_profit, last_candle, previous_candle_1)
                 if mark_pair:
@@ -18988,6 +18988,8 @@ class NostalgiaForInfinityX(IStrategy):
                         (
                             (dataframe['close'] < dataframe['ema_20'] * 0.95)
                             & (dataframe['crsi_1h'] > 10.0)
+                            & (dataframe['hl_pct_change_36'] < 0.16)
+                            & (dataframe['hl_pct_change_48_1h'] < 0.5)
                         )
                         |
                         (
@@ -18998,8 +19000,15 @@ class NostalgiaForInfinityX(IStrategy):
                         (
                             (dataframe['close'] < dataframe['bb20_2_low'] * 0.999)
                             & (dataframe['crsi_1h'] > 10.0)
+                            & (dataframe['hl_pct_change_36'] < 0.16)
+                            & (dataframe['hl_pct_change_48_1h'] < 0.5)
                         )
-                        | ((dataframe['ema_26'] - dataframe['ema_12']) > (dataframe['open'] * 0.028))
+                        |
+                        (
+                            ((dataframe['ema_26'] - dataframe['ema_12']) > (dataframe['open'] * 0.028))
+                            & (dataframe['hl_pct_change_36'] < 0.16)
+                            & (dataframe['hl_pct_change_48_1h'] < 0.5)
+                        )
                         |
                         (
                             (dataframe['close_15m'] < (dataframe['bb20_2_low_15m'] * 0.97))
@@ -19007,7 +19016,12 @@ class NostalgiaForInfinityX(IStrategy):
                             & (dataframe['tpct_change_144'] < 0.16)
                         )
                         | ((dataframe['ema_26_15m'] - dataframe['ema_12_15m']) > (dataframe['open_15m'] * 0.03))
-                        | (dataframe['rsi_14_15m'] < 20.0)
+                        |
+                        (
+                            (dataframe['rsi_14_15m'] < 20.0)
+                            & (dataframe['hl_pct_change_36'] < 0.16)
+                            & (dataframe['hl_pct_change_48_1h'] < 0.5)
+                        )
                         | (dataframe['cti_15m'] < -0.9)
                     )
 
