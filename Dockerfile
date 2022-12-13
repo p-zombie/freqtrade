@@ -24,5 +24,8 @@ COPY load_env.sh /freqtrade/load_env.sh
 COPY Procfile /freqtrade/Procfile
 COPY user_data /freqtrade/user_data
 
+RUN chown -R ftuser:ftuser /freqtrade
+RUN chmod 755 /freqtrade
+
 USER ftuser
 ENTRYPOINT ["./load_env.sh"]
