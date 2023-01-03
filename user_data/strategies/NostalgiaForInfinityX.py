@@ -117,7 +117,7 @@ class NostalgiaForInfinityX(IStrategy):
     INTERFACE_VERSION = 3
 
     def version(self) -> str:
-        return "v11.3.106"
+        return "v11.3.107"
 
 
     # ROI table:
@@ -9850,7 +9850,7 @@ class NostalgiaForInfinityX(IStrategy):
         informative_1h['hl_pct_change_6'] = self.range_percent_change(informative_1h, 'HL', 6)
 
         # 1h not strong downtrend
-        informative_1h['not_downtrend'] = ((informative_1h['close'] > informative_1h['close'].shift(2)) | (informative_1h['crsi'] > 30.0))
+        informative_1h['not_downtrend'] = ((informative_1h['close'] > informative_1h['close'].shift(2)) | (informative_1h['rsi_14'] > 50.0))
 
         tok = time.perf_counter()
         log.debug(f"[{metadata['pair']}] informative_1h_indicators took: {tok - tik:0.4f} seconds.")
@@ -16297,7 +16297,12 @@ class NostalgiaForInfinityX(IStrategy):
                     )
                     item_buy_logic.append(
                         (dataframe['cmf'] > 0.1)
-                        | (dataframe['mfi'] > 36.0)
+                        |
+                        (
+                            (dataframe['mfi'] > 36.0)
+                            & (dataframe['hl_pct_change_36'] < 0.1)
+                            & (dataframe['not_downtrend_1h'])
+                        )
                         |
                         (
                             (dataframe['rsi_14'] < 25.0)
@@ -16309,16 +16314,22 @@ class NostalgiaForInfinityX(IStrategy):
                         (
                             (dataframe['cti_1h'] < -0.0)
                             & (dataframe['btc_pct_close_max_72_5m'] < 1.06)
+                            & (dataframe['hl_pct_change_36'] < 0.1)
+                            & (dataframe['not_downtrend_1h'])
                         )
                         |
                         (
                             (dataframe['rsi_14_1h'] < 50.0)
                             & (dataframe['btc_pct_close_max_72_5m'] < 1.06)
+                            & (dataframe['hl_pct_change_36'] < 0.1)
+                            & (dataframe['not_downtrend_1h'])
                         )
                         |
                         (
                             (dataframe['r_14_1h'] < -75.0)
                             & (dataframe['btc_pct_close_max_72_5m'] < 1.06)
+                            & (dataframe['hl_pct_change_36'] < 0.1)
+                            & (dataframe['not_downtrend_1h'])
                         )
                         |
                         (
@@ -16368,7 +16379,12 @@ class NostalgiaForInfinityX(IStrategy):
                         | (dataframe['close_15m'] < (dataframe['bb20_2_low_15m'] * 0.99))
                         | ((dataframe['ema_26_15m'] - dataframe['ema_12_15m']) > (dataframe['open_15m'] * 0.02))
                         | (dataframe['rsi_14_15m'] < 30.0)
-                        | (dataframe['cti_15m'] < -0.9)
+                        |
+                        (
+                            (dataframe['cti_15m'] < -0.9)
+                            & (dataframe['hl_pct_change_36'] < 0.1)
+                            & (dataframe['not_downtrend_1h'])
+                        )
                     )
 
                 # Condition #32 - Long mode. Local dip.
