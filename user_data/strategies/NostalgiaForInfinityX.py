@@ -4,13 +4,13 @@
  "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd">
 <html>
   <head>
-    <title>503 first byte timeout</title>
+    <title>503 backend read error</title>
   </head>
   <body>
-    <h1>Error 503 first byte timeout</h1>
-    <p>first byte timeout</p>
+    <h1>Error 503 backend read error</h1>
+    <p>backend read error</p>
     <h3>Error 54113</h3>
-    <p>Details: cache-dfw-kdal2120081-DFW 1691609829 1986794506</p>
+    <p>Details: cache-dfw-kdal2120081-DFW 1691610242 1989368604</p>
     <hr>
     <p>Varnish cache server</p>
   </body>
