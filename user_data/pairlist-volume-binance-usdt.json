@@ -1,8 +1,39 @@
-
-<html>
-<head>
-<title>Fastly error: unknown domain raw.githubusercontent.com</title>
-</head>
-<body>
-<p>Fastly error: unknown domain: raw.githubusercontent.com. Please check that this domain has been added to a service.</p>
-<p>Details: cache-pao-kpao1770057-PAO (185.199.108.133)</p></body></html>
+{
+  "pairlists": [
+    {
+      "method": "VolumePairList",
+      "number_assets": 100,
+      "sort_key": "quoteVolume",
+      "refresh_period": 1800
+    },
+    { "method": "FullTradesFilter" },
+    { "method": "AgeFilter", "min_days_listed": 30 },
+    {
+      "method": "PriceFilter",
+      "low_price_ratio": 0.003
+    },
+    {
+      "method": "SpreadFilter",
+      "max_spread_ratio": 0.005
+    },
+    // {
+    //   "method": "RangeStabilityFilter",
+    //   "lookback_days": 3,
+    //   "min_rate_of_change": 0.03,
+    //   "refresh_period": 1800
+    // },
+    // {
+    //   "method": "VolatilityFilter",
+    //   "lookback_days": 3,
+    //   "min_volatility": 0.01,
+    //   "max_volatility": 0.75,
+    //   "refresh_period": 43200
+    // },
+    {
+      "method": "VolumePairList",
+      "number_assets": 80,
+      "sort_key": "quoteVolume"
+    },
+    // { "method": "ShuffleFilter" }
+  ]
+}
